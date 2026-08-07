@@ -6,7 +6,8 @@ import math
 import uuid
 import datetime
 from pathlib import Path
-from typing import List, Dict, Any, Optional, Tuple
+from typing import List, Dict, Any, Optional, Tuple, Callable
+
 
 class VectorEngine:
     """Per-database engine handling text extraction, chunking, vector indexing and similarity search."""
@@ -249,8 +250,14 @@ Excerpt:
 
         return ""
 
-    def enrich_missing_questions(self, doc_id: Optional[str] = None) -> int:
-        """Scan chunks missing Synthetic Q&A, generate Q&A via LLM with incremental commits, and update vectors."""
+    def enrich_missing_questions(
+        self,
+        doc_id: Optional[str] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
+    ) -> int:
+        """Scan chunks missing Synthetic Q&A, generate Q&A via LLM with incremental commits, progress metrics, and ETA."""
+        import time
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             if doc_id:
@@ -264,8 +271,14 @@ Excerpt:
                 )
             rows = cursor.fetchall()
 
+        total_chunks = len(rows)
+        if total_chunks == 0:
+            return 0
+
+        start_time = time.time()
         updated_count = 0
-        for r in rows:
+
+        for idx, r in enumerate(rows):
             chunk_id, filename, content, parent_text = r
             
             # Extract header and raw text
@@ -289,7 +302,28 @@ Excerpt:
                     conn.commit()
                 updated_count += 1
 
+            if progress_callback:
+                now = time.time()
+                elapsed = now - start_time
+                completed = idx + 1
+                avg_speed = elapsed / completed if completed > 0 else 0
+                remaining = total_chunks - completed
+                eta_sec = remaining * avg_speed
+                pct = round((completed / total_chunks) * 100, 1)
+
+                progress_callback({
+                    "filename": filename,
+                    "completed_chunks": completed,
+                    "total_chunks": total_chunks,
+                    "percentage": pct,
+                    "elapsed_seconds": round(elapsed, 1),
+                    "avg_speed_sec": round(avg_speed, 2),
+                    "eta_seconds": round(eta_sec, 1),
+                    "status_message": f"Enriching Chunk {completed}/{total_chunks} ({pct}%)"
+                })
+
         return updated_count
+
 
 
 
@@ -404,9 +438,12 @@ Excerpt:
         filename: str,
         folder: str = "General",
         enrich_qa: bool = False,
-        parent_child: bool = False
+        parent_child: bool = False,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None
     ) -> Dict[str, Any]:
         """Extract, clean, chunk (with optional Parent-Child and Synthetic Q&A), compute embeddings and persist document & chunks."""
+        import time
+
         file_bytes = file_path.stat().st_size
         text_content = self.extract_text(file_path, filename)
         folder_clean = folder.strip() if folder and folder.strip() else "General"
@@ -422,11 +459,14 @@ Excerpt:
         file_type = filename.split(".")[-1].lower() if "." in filename else "txt"
         uploaded_at = datetime.datetime.utcnow().isoformat()
 
+        total_chunks = len(chunk_pairs)
+        start_time = time.time()
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
                 "INSERT INTO documents VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (doc_id, filename, file_type, file_bytes, uploaded_at, len(chunk_pairs), folder_clean)
+                (doc_id, filename, file_type, file_bytes, uploaded_at, total_chunks, folder_clean)
             )
 
             for idx, pair in enumerate(chunk_pairs):
@@ -450,6 +490,28 @@ Excerpt:
                     (chunk_id, doc_id, filename, idx, chunk_content, vector_json, parent_text)
                 )
                 conn.commit()
+
+                if progress_callback:
+                    now = time.time()
+                    elapsed = now - start_time
+                    completed = idx + 1
+                    avg_speed = elapsed / completed if completed > 0 else 0
+                    remaining = total_chunks - completed
+                    eta_sec = remaining * avg_speed
+                    pct = round((completed / total_chunks) * 100, 1)
+
+                    progress_callback({
+                        "doc_id": doc_id,
+                        "filename": filename,
+                        "completed_chunks": completed,
+                        "total_chunks": total_chunks,
+                        "percentage": pct,
+                        "elapsed_seconds": round(elapsed, 1),
+                        "avg_speed_sec": round(avg_speed, 2),
+                        "eta_seconds": round(eta_sec, 1),
+                        "status_message": f"Processing Chunk {completed}/{total_chunks} ({pct}%)"
+                    })
+
 
 
         return {

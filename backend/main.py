@@ -167,6 +167,19 @@ def list_documents(db_id: str):
         raise HTTPException(status_code=404, detail=str(ve))
 
 
+# Active Ingestion Progress Tracker
+active_ingestion_tasks: Dict[str, Dict[str, Any]] = {}
+
+
+@app.get("/api/ingestion/tasks")
+def list_ingestion_tasks(db_id: Optional[str] = None):
+    """Return active or recent ingestion tasks with progress percentage, speed, and estimated time remaining (ETA)."""
+    tasks = list(active_ingestion_tasks.values())
+    if db_id:
+        return [t for t in tasks if t.get("db_id") == db_id]
+    return tasks
+
+
 @app.post("/api/databases/{db_id}/upload")
 async def upload_documents(
     db_id: str,
@@ -183,6 +196,35 @@ async def upload_documents(
         temp_dir = Path(tempfile.mkdtemp())
         try:
             for file in files:
+                task_id = f"upload_{uuid.uuid4().hex[:8]}"
+                active_ingestion_tasks[task_id] = {
+                    "task_id": task_id,
+                    "db_id": db_id,
+                    "filename": file.filename,
+                    "status": "processing",
+                    "completed_chunks": 0,
+                    "total_chunks": 0,
+                    "percentage": 0.0,
+                    "elapsed_seconds": 0.0,
+                    "avg_speed_sec": 0.0,
+                    "eta_seconds": 0.0,
+                    "status_message": f"Starting ingestion for {file.filename}..."
+                }
+
+                def make_callback(t_id):
+                    def cb(data):
+                        if t_id in active_ingestion_tasks:
+                            active_ingestion_tasks[t_id].update({
+                                "completed_chunks": data["completed_chunks"],
+                                "total_chunks": data["total_chunks"],
+                                "percentage": data["percentage"],
+                                "elapsed_seconds": data["elapsed_seconds"],
+                                "avg_speed_sec": data["avg_speed_sec"],
+                                "eta_seconds": data["eta_seconds"],
+                                "status_message": data["status_message"],
+                            })
+                    return cb
+
                 temp_filepath = temp_dir / file.filename
                 with open(temp_filepath, "wb") as f:
                     content = await file.read()
@@ -193,8 +235,13 @@ async def upload_documents(
                     file.filename,
                     folder=folder or "General",
                     enrich_qa=bool(enrich_qa),
-                    parent_child=bool(parent_child)
+                    parent_child=bool(parent_child),
+                    progress_callback=make_callback(task_id)
                 )
+
+                active_ingestion_tasks[task_id]["status"] = "completed"
+                active_ingestion_tasks[task_id]["percentage"] = 100.0
+                active_ingestion_tasks[task_id]["status_message"] = f"Ingestion complete for {file.filename}"
                 results.append(doc_info)
 
         finally:
@@ -224,7 +271,38 @@ def enrich_missing_qa(db_id: str, doc_id: Optional[str] = None):
     """Enrich or resume generating synthetic Q&A for chunks that missed questions."""
     try:
         engine = db_manager.get_engine(db_id)
-        count = engine.enrich_missing_questions(doc_id=doc_id)
+        task_id = f"enrich_{uuid.uuid4().hex[:8]}"
+        active_ingestion_tasks[task_id] = {
+            "task_id": task_id,
+            "db_id": db_id,
+            "filename": "Synthetic Q&A Batch",
+            "status": "processing",
+            "completed_chunks": 0,
+            "total_chunks": 0,
+            "percentage": 0.0,
+            "elapsed_seconds": 0.0,
+            "avg_speed_sec": 0.0,
+            "eta_seconds": 0.0,
+            "status_message": "Scanning chunks for synthetic Q&A enrichment..."
+        }
+
+        def callback(data):
+            if task_id in active_ingestion_tasks:
+                active_ingestion_tasks[task_id].update({
+                    "completed_chunks": data["completed_chunks"],
+                    "total_chunks": data["total_chunks"],
+                    "percentage": data["percentage"],
+                    "elapsed_seconds": data["elapsed_seconds"],
+                    "avg_speed_sec": data["avg_speed_sec"],
+                    "eta_seconds": data["eta_seconds"],
+                    "status_message": data["status_message"],
+                })
+
+        count = engine.enrich_missing_questions(doc_id=doc_id, progress_callback=callback)
+        active_ingestion_tasks[task_id]["status"] = "completed"
+        active_ingestion_tasks[task_id]["percentage"] = 100.0
+        active_ingestion_tasks[task_id]["status_message"] = f"Enriched {count} chunk(s) with Synthetic Q&A"
+
         return {
             "message": f"Successfully enriched {count} chunk(s) with Synthetic Q&A in database '{db_id}'",
             "database_id": db_id,
@@ -232,6 +310,7 @@ def enrich_missing_qa(db_id: str, doc_id: Optional[str] = None):
         }
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
+
 
 
 

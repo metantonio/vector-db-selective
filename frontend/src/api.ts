@@ -86,6 +86,16 @@ export async function enrichMissingQa(dbId: string, docId?: string): Promise<any
   return res.json();
 }
 
+export async function fetchIngestionTasks(dbId?: string): Promise<any[]> {
+  const url = dbId
+    ? `${API_BASE}/ingestion/tasks?db_id=${dbId}`
+    : `${API_BASE}/ingestion/tasks`;
+  const res = await fetch(url);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+
 export async function deleteDocument(dbId: string, docId: string): Promise<void> {
 
   const res = await fetch(`${API_BASE}/databases/${dbId}/documents/${docId}`, {

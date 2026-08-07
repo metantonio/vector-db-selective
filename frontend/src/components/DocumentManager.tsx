@@ -35,6 +35,40 @@ export const DocumentManager: React.FC<Props> = ({
   const [chunkFilter, setChunkFilter] = useState('');
   const [showEmbeddings, setShowEmbeddings] = useState<Record<string, boolean>>({});
   const [enriching, setEnriching] = useState(false);
+  const [activeTask, setActiveTask] = useState<any | null>(null);
+
+  React.useEffect(() => {
+    let interval: any;
+    if (uploading || enriching) {
+      const poll = async () => {
+        const tasks = await api.fetchIngestionTasks(dbId);
+        const processingTask = tasks.find((t: any) => t.status === 'processing') || tasks[tasks.length - 1];
+        if (processingTask) {
+          setActiveTask(processingTask);
+        }
+      };
+      poll();
+      interval = setInterval(poll, 1000);
+    } else {
+      setActiveTask(null);
+    }
+    return () => clearInterval(interval);
+  }, [uploading, enriching, dbId]);
+
+  const formatTime = (seconds: number): string => {
+    if (!seconds || seconds <= 0) return '0s';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    if (m >= 60) {
+      const h = Math.floor(m / 60);
+      const remM = m % 60;
+      return `${h}h ${remM}m`;
+    }
+    if (m > 0) {
+      return `${m}m ${s}s`;
+    }
+    return `${s}s`;
+  };
 
   const handleEnrichMissingQa = async (docId?: string) => {
     setEnriching(true);
@@ -48,6 +82,7 @@ export const DocumentManager: React.FC<Props> = ({
       setEnriching(false);
     }
   };
+
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -223,20 +258,65 @@ export const DocumentManager: React.FC<Props> = ({
             accept=".pdf,.docx,.txt,.md,.csv,.json,.html,.htm"
             onChange={(e) => handleFiles(e.target.files)}
           />
-          {uploading ? (
-            <div style={{ padding: '0.75rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem' }}>
-              <RefreshCw size={32} className="spin" style={{ color: 'var(--accent-cyan)' }} />
-              <div>
-                <p style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--accent-cyan)', marginBottom: '0.2rem' }}>
-                  Processing & Indexing Document(s) in Backend...
-                </p>
-                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
-                  {enrichQa
-                    ? '🤖 Generating Synthetic Q&A pairs via LLM & building vector index...'
-                    : parentChild
-                    ? '🌳 Building Parent-Child context windows & computing vector embeddings...'
-                    : '⚡ Extracting text, cleaning paragraphs, computing TF-IDF vectors & persisting chunks...'}
-                </p>
+          {uploading || enriching ? (
+            <div style={{ padding: '0.5rem 0.75rem', width: '100%' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <span style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <RefreshCw size={18} className="spin" />
+                  {activeTask?.status_message || (enriching ? 'Enriching Synthetic Q&A via LLM...' : 'Processing & Indexing Document(s)...')}
+                </span>
+                <span style={{ fontSize: '0.95rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>
+                  {activeTask?.percentage ?? 0}%
+                </span>
+              </div>
+
+              {/* Live Progress Bar */}
+              <div style={{
+                width: '100%',
+                height: '10px',
+                background: 'rgba(15, 23, 42, 0.8)',
+                borderRadius: '5px',
+                overflow: 'hidden',
+                border: '1px solid var(--border-color)',
+                marginBottom: '0.75rem'
+              }}>
+                <div style={{
+                  width: `${Math.max(activeTask?.percentage ?? 5, 5)}%`,
+                  height: '100%',
+                  background: 'linear-gradient(90deg, var(--accent-primary), var(--accent-cyan))',
+                  transition: 'width 0.4s ease',
+                  borderRadius: '5px'
+                }} />
+              </div>
+
+              {/* Detailed Real-time Metrics */}
+              <div style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))',
+                gap: '0.75rem',
+                fontSize: '0.78rem',
+                fontFamily: 'var(--font-mono)',
+                background: 'rgba(15, 23, 42, 0.6)',
+                padding: '0.6rem 0.85rem',
+                borderRadius: '8px',
+                border: '1px solid rgba(255, 255, 255, 0.06)'
+              }}>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Progress: </span>
+                  <strong style={{ color: '#fff' }}>{activeTask?.completed_chunks ?? 0} / {activeTask?.total_chunks ?? 0}</strong>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Avg Speed: </span>
+                  <strong style={{ color: '#fff' }}>{activeTask?.avg_speed_sec ?? 0}s</strong> / chunk
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Elapsed: </span>
+                  <strong style={{ color: '#fff' }}>{formatTime(activeTask?.elapsed_seconds ?? 0)}</strong>
+                </div>
+                <div>
+                  <span style={{ color: 'var(--text-muted)' }}>Est. Remaining: </span>
+                  <strong style={{ color: 'var(--accent-cyan)' }}>{formatTime(activeTask?.eta_seconds ?? 0)}</strong>
+                </div>
               </div>
             </div>
           ) : (
@@ -351,6 +431,15 @@ export const DocumentManager: React.FC<Props> = ({
                     <td style={{ padding: '0.65rem', color: 'var(--text-muted)' }}>{doc.folder}</td>
                     <td style={{ padding: '0.65rem', textAlign: 'right' }}>
                       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem' }}>
+                        <button
+                          className="btn btn-secondary"
+                          style={{ padding: '0.25rem 0.5rem', color: 'var(--accent-cyan)' }}
+                          onClick={() => handleEnrichMissingQa(doc.id)}
+                          disabled={uploading || enriching}
+                          title="Resume or enrich synthetic Q&A for this specific document"
+                        >
+                          <Sparkles size={14} className={enriching ? 'spin' : ''} /> Enrich Q&A
+                        </button>
                         <button
                           className="btn btn-secondary"
                           style={{ padding: '0.25rem 0.5rem' }}
