@@ -16,7 +16,6 @@ if not exist "%~dp0.env" if not exist "%~dp0backend\.env" (
 )
 
 if not exist "%~dp0backend\venv" (
-
     echo Virtual environment not found. Creating venv in backend\venv...
     python -m venv "%~dp0backend\venv"
     if errorlevel 1 (
@@ -24,18 +23,20 @@ if not exist "%~dp0backend\venv" (
         pause
         exit /b 1
     )
-    echo Installing backend dependencies from requirements.txt...
-    "%~dp0backend\venv\Scripts\python.exe" -m pip install --upgrade pip
-    "%~dp0backend\venv\Scripts\python.exe" -m pip install -r "%~dp0backend\requirements.txt"
-    if errorlevel 1 (
-        echo ERROR: Failed to install Python dependencies.
-        pause
-        exit /b 1
-    )
-    echo Backend virtual environment setup completed successfully.
 ) else (
-    echo Backend virtual environment already exists.
+    echo Backend virtual environment folder exists.
 )
+
+echo Installing / verifying backend dependencies from requirements.txt...
+"%~dp0backend\venv\Scripts\python.exe" -m pip install --upgrade pip
+"%~dp0backend\venv\Scripts\python.exe" -m pip install -r "%~dp0backend\requirements.txt"
+if errorlevel 1 (
+    echo ERROR: Failed to install Python dependencies.
+    pause
+    exit /b 1
+)
+echo Backend virtual environment and dependencies are ready.
+
 
 echo.
 
