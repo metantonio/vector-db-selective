@@ -255,6 +255,26 @@ class VectorEngine:
                 for r in rows
             ]
 
+    def get_document_chunks(self, doc_id: str) -> List[Dict[str, Any]]:
+        """Get all text chunks for a specific document ordered by chunk_index."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, document_id, filename, chunk_index, content FROM chunks WHERE document_id = ? ORDER BY chunk_index ASC",
+                (doc_id,)
+            )
+            rows = cursor.fetchall()
+            return [
+                {
+                    "chunk_id": r[0],
+                    "document_id": r[1],
+                    "filename": r[2],
+                    "chunk_index": r[3],
+                    "content": r[4]
+                }
+                for r in rows
+            ]
+
     def delete_document(self, doc_id: str) -> bool:
         """Delete a document and its vector chunks."""
         with sqlite3.connect(self.db_path) as conn:
@@ -263,6 +283,7 @@ class VectorEngine:
             cursor.execute("DELETE FROM documents WHERE id = ?", (doc_id,))
             conn.commit()
             return cursor.rowcount > 0
+
 
     def search_chunks(self, query: str, top_k: int = 4, doc_ids: Optional[List[str]] = None, min_score: float = 0.0) -> List[Dict[str, Any]]:
         """Similarity search over chunks in this database."""

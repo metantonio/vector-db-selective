@@ -60,7 +60,14 @@ export async function uploadDocuments(dbId: string, files: File[], folder: strin
   return res.json();
 }
 
+export async function fetchDocumentChunks(dbId: string, docId: string): Promise<any[]> {
+  const res = await fetch(`${API_BASE}/databases/${dbId}/documents/${docId}/chunks`);
+  if (!res.ok) throw new Error('Failed to fetch document chunks');
+  return res.json();
+}
+
 export async function deleteDocument(dbId: string, docId: string): Promise<void> {
+
   const res = await fetch(`${API_BASE}/databases/${dbId}/documents/${docId}`, {
     method: 'DELETE',
   });

@@ -165,6 +165,16 @@ async def upload_documents(
         raise HTTPException(status_code=404, detail=str(ve))
 
 
+@app.get("/api/databases/{db_id}/documents/{doc_id}/chunks")
+def get_document_chunks(db_id: str, doc_id: str):
+    """Retrieve all chunks belonging to a specific document."""
+    try:
+        engine = db_manager.get_engine(db_id)
+        return engine.get_document_chunks(doc_id)
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+
+
 @app.delete("/api/databases/{db_id}/documents/{doc_id}")
 def delete_document(db_id: str, doc_id: str):
     """Delete a document and its chunks from a specific vector database."""
@@ -176,6 +186,7 @@ def delete_document(db_id: str, doc_id: str):
         return {"message": "Document deleted successfully", "doc_id": doc_id, "database_id": db_id}
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
+
 
 
 # --- Vector Search & RAG Query Endpoints ---
