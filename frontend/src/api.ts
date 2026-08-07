@@ -74,6 +74,18 @@ export async function fetchDocumentChunks(dbId: string, docId: string): Promise<
   return res.json();
 }
 
+export async function enrichMissingQa(dbId: string, docId?: string): Promise<any> {
+  const url = docId
+    ? `${API_BASE}/databases/${dbId}/enrich-qa?doc_id=${docId}`
+    : `${API_BASE}/databases/${dbId}/enrich-qa`;
+  const res = await fetch(url, { method: 'POST' });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || 'Failed to enrich synthetic Q&A');
+  }
+  return res.json();
+}
+
 export async function deleteDocument(dbId: string, docId: string): Promise<void> {
 
   const res = await fetch(`${API_BASE}/databases/${dbId}/documents/${docId}`, {

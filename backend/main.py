@@ -218,6 +218,22 @@ def get_document_chunks(db_id: str, doc_id: str):
         raise HTTPException(status_code=404, detail=str(ve))
 
 
+@app.post("/api/databases/{db_id}/enrich-qa")
+def enrich_missing_qa(db_id: str, doc_id: Optional[str] = None):
+    """Enrich or resume generating synthetic Q&A for chunks that missed questions."""
+    try:
+        engine = db_manager.get_engine(db_id)
+        count = engine.enrich_missing_questions(doc_id=doc_id)
+        return {
+            "message": f"Successfully enriched {count} chunk(s) with Synthetic Q&A in database '{db_id}'",
+            "database_id": db_id,
+            "enriched_chunks": count
+        }
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+
+
+
 @app.delete("/api/databases/{db_id}/documents/{doc_id}")
 def delete_document(db_id: str, doc_id: str):
     """Delete a document and its chunks from a specific vector database."""

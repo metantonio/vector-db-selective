@@ -33,6 +33,20 @@ export const DocumentManager: React.FC<Props> = ({
   const [loadingChunks, setLoadingChunks] = useState(false);
   const [chunkFilter, setChunkFilter] = useState('');
   const [showEmbeddings, setShowEmbeddings] = useState<Record<string, boolean>>({});
+  const [enriching, setEnriching] = useState(false);
+
+  const handleEnrichMissingQa = async (docId?: string) => {
+    setEnriching(true);
+    try {
+      const res = await api.enrichMissingQa(dbId, docId);
+      alert(res.message || 'Synthetic Q&A enrichment complete!');
+      onRefresh();
+    } catch (err: any) {
+      alert(err.message || 'Failed to enrich missing Q&A');
+    } finally {
+      setEnriching(false);
+    }
+  };
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -158,9 +172,21 @@ export const DocumentManager: React.FC<Props> = ({
       <div className="glass-panel" style={{ flex: 1, padding: '1.25rem', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>Indexed Documents ({documents.length})</h3>
-          <button className="btn btn-secondary" style={{ padding: '0.35rem 0.65rem' }} onClick={onRefresh} disabled={uploading}>
-            <RefreshCw size={14} className={uploading ? 'spin' : ''} /> Refresh
-          </button>
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              className="btn btn-secondary"
+              style={{ padding: '0.35rem 0.65rem' }}
+              onClick={() => handleEnrichMissingQa()}
+              disabled={uploading || enriching}
+              title="Scan and generate synthetic Q&As for any chunks that missed LLM processing"
+            >
+              <Sparkles size={14} className={enriching ? 'spin' : ''} style={{ color: 'var(--accent-cyan)' }} />
+              {enriching ? 'Enriching Q&As...' : 'Resume / Enrich Q&As'}
+            </button>
+            <button className="btn btn-secondary" style={{ padding: '0.35rem 0.65rem' }} onClick={onRefresh} disabled={uploading || enriching}>
+              <RefreshCw size={14} className={uploading ? 'spin' : ''} /> Refresh
+            </button>
+          </div>
         </div>
 
         {uploading && (

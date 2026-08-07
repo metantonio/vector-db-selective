@@ -175,9 +175,14 @@ class VectorEngine:
     # --- Phase 1: Synthetic Question Generation (Ollama / llama.cpp / OpenAI) ---
 
     def generate_synthetic_questions(self, chunk_text: str) -> str:
-        """Generate 2-3 synthetic questions using local LLM server (Ollama, llama.cpp, or OpenAI-compatible server)."""
+        """Generate 2-3 synthetic questions using local LLM server with retries and configurable timeout."""
         ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
         default_model = os.getenv("OLLAMA_DEFAULT_MODEL", "llama.cpp")
+
+        try:
+            llm_timeout = float(os.getenv("LLM_TIMEOUT", "60.0"))
+        except ValueError:
+            llm_timeout = 60.0
 
         prompt = f"""Based on the following text excerpt, generate 2 or 3 short natural questions that can be directly answered by this text.
 Return ONLY the questions, separated by newlines, with no extra text or numbering.
@@ -186,59 +191,106 @@ Excerpt:
 {chunk_text[:1200]}"""
 
         import httpx
+        import time
 
-        # 1. Try Ollama native endpoint (/api/generate)
-        try:
-            with httpx.Client(timeout=10.0) as client:
-                res = client.post(
-                    f"{ollama_url}/api/generate",
-                    json={"model": default_model, "prompt": prompt, "stream": False}
-                )
-                if res.status_code == 200:
-                    data = res.json()
-                    questions = data.get("response", "").strip()
-                    if questions:
-                        return questions
-        except Exception:
-            pass
-
-        # 2. Try OpenAI-compatible / llama.cpp endpoint (/v1/chat/completions)
-        try:
-            with httpx.Client(timeout=10.0) as client:
-                res = client.post(
-                    f"{ollama_url}/v1/chat/completions",
-                    json={
-                        "model": default_model,
-                        "messages": [{"role": "user", "content": prompt}],
-                        "stream": False
-                    }
-                )
-                if res.status_code == 200:
-                    data = res.json()
-                    choices = data.get("choices", [])
-                    if choices:
-                        questions = choices[0].get("message", {}).get("content", "").strip()
+        for attempt in range(2):
+            # 1. Try Ollama native endpoint (/api/generate)
+            try:
+                with httpx.Client(timeout=llm_timeout) as client:
+                    res = client.post(
+                        f"{ollama_url}/api/generate",
+                        json={"model": default_model, "prompt": prompt, "stream": False}
+                    )
+                    if res.status_code == 200:
+                        data = res.json()
+                        questions = data.get("response", "").strip()
                         if questions:
                             return questions
-        except Exception:
-            pass
+            except Exception:
+                pass
 
-        # 3. Try llama.cpp native completion endpoint (/completion)
-        try:
-            with httpx.Client(timeout=10.0) as client:
-                res = client.post(
-                    f"{ollama_url}/completion",
-                    json={"prompt": prompt, "temperature": 0.3}
-                )
-                if res.status_code == 200:
-                    data = res.json()
-                    questions = data.get("content", "").strip()
-                    if questions:
-                        return questions
-        except Exception as err:
-            print(f"[Synthetic Q&A Error] Failed to reach LLM at {ollama_url}: {err}")
+            # 2. Try OpenAI-compatible / llama.cpp endpoint (/v1/chat/completions)
+            try:
+                with httpx.Client(timeout=llm_timeout) as client:
+                    res = client.post(
+                        f"{ollama_url}/v1/chat/completions",
+                        json={
+                            "model": default_model,
+                            "messages": [{"role": "user", "content": prompt}],
+                            "stream": False
+                        }
+                    )
+                    if res.status_code == 200:
+                        data = res.json()
+                        choices = data.get("choices", [])
+                        if choices:
+                            questions = choices[0].get("message", {}).get("content", "").strip()
+                            if questions:
+                                return questions
+            except Exception:
+                pass
+
+            # 3. Try llama.cpp native completion endpoint (/completion)
+            try:
+                with httpx.Client(timeout=llm_timeout) as client:
+                    res = client.post(
+                        f"{ollama_url}/completion",
+                        json={"prompt": prompt, "temperature": 0.3}
+                    )
+                    if res.status_code == 200:
+                        data = res.json()
+                        questions = data.get("content", "").strip()
+                        if questions:
+                            return questions
+            except Exception as err:
+                if attempt == 1:
+                    print(f"[Synthetic Q&A Error] Failed to reach LLM at {ollama_url} (attempt {attempt+1}): {err}")
+                time.sleep(1.0)
 
         return ""
+
+    def enrich_missing_questions(self, doc_id: Optional[str] = None) -> int:
+        """Scan chunks missing Synthetic Q&A, generate Q&A via LLM with incremental commits, and update vectors."""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            if doc_id:
+                cursor.execute(
+                    "SELECT id, filename, content, parent_content FROM chunks WHERE document_id = ? AND content NOT LIKE '%[Synthetic Questions:%'",
+                    (doc_id,)
+                )
+            else:
+                cursor.execute(
+                    "SELECT id, filename, content, parent_content FROM chunks WHERE content NOT LIKE '%[Synthetic Questions:%'"
+                )
+            rows = cursor.fetchall()
+
+        updated_count = 0
+        for r in rows:
+            chunk_id, filename, content, parent_text = r
+            
+            # Extract header and raw text
+            parts = content.split("\n", 1)
+            header_prefix = parts[0] + "\n" if len(parts) > 1 else ""
+            raw_child_text = parts[1] if len(parts) > 1 else content
+
+            qa_text = self.generate_synthetic_questions(raw_child_text)
+            if qa_text:
+                qa_block = f"[Synthetic Questions:\n{qa_text}]\n\n"
+                new_content = f"{header_prefix}{qa_block}{raw_child_text}"
+                new_vector = self._compute_vector(new_content)
+                new_vector_json = json.dumps(new_vector)
+
+                with sqlite3.connect(self.db_path) as conn:
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        "UPDATE chunks SET content = ?, embedding = ? WHERE id = ?",
+                        (new_content, new_vector_json, chunk_id)
+                    )
+                    conn.commit()
+                updated_count += 1
+
+        return updated_count
+
 
 
     # --- Hierarchical Sentence-Window Chunking & Phase 2 Parent-Child ---
@@ -397,8 +449,8 @@ Excerpt:
                     "INSERT INTO chunks (id, document_id, filename, chunk_index, content, embedding, parent_content) VALUES (?, ?, ?, ?, ?, ?, ?)",
                     (chunk_id, doc_id, filename, idx, chunk_content, vector_json, parent_text)
                 )
+                conn.commit()
 
-            conn.commit()
 
         return {
             "id": doc_id,
