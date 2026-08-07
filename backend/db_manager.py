@@ -1,0 +1,159 @@
+import os
+import sqlite3
+import datetime
+import re
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+from vector_engine import VectorEngine
+
+class DatabaseManager:
+    """Manages creation, listing, deletion, and selection of isolated SQLite vector databases."""
+
+    def __init__(self, data_dir: str = "./data/databases"):
+        self.data_dir = Path(data_dir).resolve()
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.registry_db = self.data_dir / "_registry.db"
+        self._init_registry()
+
+    def _init_registry(self):
+        """Initialize the master registry DB that keeps track of databases and their metadata."""
+        with sqlite3.connect(self.registry_db) as conn:
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS databases (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    description TEXT,
+                    created_at TEXT NOT NULL,
+                    db_filename TEXT NOT NULL
+                )
+            """)
+            conn.commit()
+
+        # Ensure default database exists
+        if not self.get_database("default"):
+            self.create_database("default", "Default Vector Store", "System default vector database")
+
+    def _slugify(self, text: str) -> str:
+        text = text.lower().strip()
+        text = re.sub(r"[^\w\s-]", "", text)
+        return re.sub(r"[-\s]+", "_", text)
+
+    def create_database(self, db_id: str, name: str, description: str = "") -> Dict[str, Any]:
+        """Create a new isolated vector database file."""
+        clean_id = self._slugify(db_id)
+        if not clean_id:
+            clean_id = f"db_{int(datetime.datetime.utcnow().timestamp())}"
+
+        db_filename = f"{clean_id}.db"
+        db_filepath = self.data_dir / db_filename
+        created_at = datetime.datetime.utcnow().isoformat()
+
+        with sqlite3.connect(self.registry_db) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT OR REPLACE INTO databases (id, name, description, created_at, db_filename) VALUES (?, ?, ?, ?, ?)",
+                (clean_id, name.strip(), description.strip(), created_at, db_filename)
+            )
+            conn.commit()
+
+        # Initialize the actual database schema via VectorEngine initialization
+        from vector_engine import VectorEngine
+        engine = VectorEngine(db_filepath)
+        stats = engine.get_stats()
+
+        return {
+            "id": clean_id,
+            "name": name,
+            "description": description,
+            "created_at": created_at,
+            "document_count": stats["document_count"],
+            "chunk_count": stats["chunk_count"],
+            "file_size_bytes": stats["file_size_bytes"]
+        }
+
+    def list_databases(self) -> List[Dict[str, Any]]:
+        """List all available vector databases with live statistics."""
+        with sqlite3.connect(self.registry_db) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, description, created_at, db_filename FROM databases ORDER BY created_at ASC")
+            rows = cursor.fetchall()
+
+        from vector_engine import VectorEngine
+        result = []
+        for r in rows:
+            db_id, name, desc, created_at, db_filename = r
+            db_filepath = self.data_dir / db_filename
+            engine = VectorEngine(db_filepath)
+            stats = engine.get_stats()
+            result.append({
+                "id": db_id,
+                "name": name,
+                "description": desc or "",
+                "created_at": created_at,
+                "document_count": stats["document_count"],
+                "chunk_count": stats["chunk_count"],
+                "file_size_bytes": stats["file_size_bytes"]
+            })
+        return result
+
+    def get_database(self, db_id: str) -> Optional[Dict[str, Any]]:
+        """Get info for a specific database."""
+        with sqlite3.connect(self.registry_db) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, name, description, created_at, db_filename FROM databases WHERE id = ?", (db_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            
+        db_id, name, desc, created_at, db_filename = row
+        db_filepath = self.data_dir / db_filename
+        from vector_engine import VectorEngine
+        engine = VectorEngine(db_filepath)
+        stats = engine.get_stats()
+        return {
+            "id": db_id,
+            "name": name,
+            "description": desc or "",
+            "created_at": created_at,
+            "document_count": stats["document_count"],
+            "chunk_count": stats["chunk_count"],
+            "file_size_bytes": stats["file_size_bytes"]
+        }
+
+    def delete_database(self, db_id: str) -> bool:
+        """Delete a vector database and its physical file."""
+        if db_id == "default":
+            # Don't delete registry entry for default, just reset its data
+            db_filepath = self.data_dir / "default.db"
+            if db_filepath.exists():
+                os.remove(db_filepath)
+            from vector_engine import VectorEngine
+            VectorEngine(db_filepath)
+            return True
+
+        with sqlite3.connect(self.registry_db) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT db_filename FROM databases WHERE id = ?", (db_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            db_filename = row[0]
+            cursor.execute("DELETE FROM databases WHERE id = ?", (db_id,))
+            conn.commit()
+
+        db_filepath = self.data_dir / db_filename
+        if db_filepath.exists():
+            try:
+                os.remove(db_filepath)
+            except Exception:
+                pass
+        return True
+
+    def get_engine(self, db_id: str):
+        """Get VectorEngine instance for the specified database id."""
+        db_info = self.get_database(db_id)
+        if not db_info:
+            raise ValueError(f"Database with id '{db_id}' does not exist.")
+        db_filename = f"{db_info['id']}.db"
+        return VectorEngine(self.data_dir / db_filename)
