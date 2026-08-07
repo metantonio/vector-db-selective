@@ -9,11 +9,26 @@ from vector_engine import VectorEngine
 class DatabaseManager:
     """Manages creation, listing, deletion, and selection of isolated SQLite vector databases."""
 
-    def __init__(self, data_dir: str = "./data/databases"):
-        self.data_dir = Path(data_dir).resolve()
+    def __init__(self, data_dir: Optional[str] = None):
+        if not data_dir:
+            project_root = Path(__file__).parent.parent.resolve()
+            env_dir = os.getenv("DATA_DIR", "./data/databases")
+            if not Path(env_dir).is_absolute():
+                self.data_dir = (project_root / env_dir).resolve()
+            else:
+                self.data_dir = Path(env_dir).resolve()
+        else:
+            p = Path(data_dir)
+            if not p.is_absolute():
+                project_root = Path(__file__).parent.parent.resolve()
+                self.data_dir = (project_root / p).resolve()
+            else:
+                self.data_dir = p.resolve()
+
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.registry_db = self.data_dir / "_registry.db"
         self._init_registry()
+
 
     def _init_registry(self):
         """Initialize the master registry DB that keeps track of databases and their metadata."""

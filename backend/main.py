@@ -44,8 +44,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Global Database Manager instance
-db_manager = DatabaseManager(data_dir="./data/databases")
+# Global Database Manager instance (resolves canonically to project root data/databases)
+db_manager = DatabaseManager()
+
 
 # Ollama Server Configuration
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
