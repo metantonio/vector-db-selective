@@ -135,9 +135,11 @@ def list_documents(db_id: str):
 async def upload_documents(
     db_id: str,
     files: List[UploadFile] = File(...),
-    folder: Optional[str] = Form("General")
+    folder: Optional[str] = Form("General"),
+    enrich_qa: Optional[bool] = Form(False),
+    parent_child: Optional[bool] = Form(False)
 ):
-    """Upload one or more documents, extract text, chunk, and index into the specified vector database."""
+    """Upload one or more documents, extract text, chunk (with optional Synthetic Q&A and Parent-Child Indexing), and index into vector DB."""
     try:
         engine = db_manager.get_engine(db_id)
         results = []
@@ -150,7 +152,13 @@ async def upload_documents(
                     content = await file.read()
                     f.write(content)
 
-                doc_info = engine.ingest_document(temp_filepath, file.filename, folder=folder or "General")
+                doc_info = engine.ingest_document(
+                    temp_filepath,
+                    file.filename,
+                    folder=folder or "General",
+                    enrich_qa=bool(enrich_qa),
+                    parent_child=bool(parent_child)
+                )
                 results.append(doc_info)
 
         finally:

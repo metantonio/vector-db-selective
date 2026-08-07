@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, FileText, Trash2, Folder, RefreshCw, Eye, Layers, X, Search } from 'lucide-react';
+import { UploadCloud, FileText, Trash2, Folder, RefreshCw, Eye, Layers, X, Search, Sparkles, GitBranch } from 'lucide-react';
 import { DocumentItem } from '../types';
 import * as api from '../api';
 
@@ -7,7 +7,7 @@ interface Props {
   dbId: string;
   documents: DocumentItem[];
   loading: boolean;
-  onUpload: (files: File[], folder: string) => Promise<void>;
+  onUpload: (files: File[], folder: string, enrichQa?: boolean, parentChild?: boolean) => Promise<void>;
   onDelete: (docId: string) => Promise<void>;
   onRefresh: () => void;
 }
@@ -21,6 +21,8 @@ export const DocumentManager: React.FC<Props> = ({
   onRefresh,
 }) => {
   const [folder, setFolder] = useState('General');
+  const [enrichQa, setEnrichQa] = useState(false);
+  const [parentChild, setParentChild] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -36,7 +38,7 @@ export const DocumentManager: React.FC<Props> = ({
     if (!files || files.length === 0) return;
     setUploading(true);
     try {
-      await onUpload(Array.from(files), folder);
+      await onUpload(Array.from(files), folder, enrichQa, parentChild);
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -115,6 +117,18 @@ export const DocumentManager: React.FC<Props> = ({
           <p style={{ fontSize: '0.9rem', fontWeight: 500 }}>
             {uploading ? 'Processing & Indexing Vector Chunks...' : 'Drag & drop files here, or click to browse'}
           </p>
+        </div>
+
+        {/* Phase 1 & Phase 2 Advanced Chunking Options */}
+        <div style={{ display: 'flex', gap: '1.5rem', marginTop: '0.8rem', paddingTop: '0.6rem', borderTop: '1px solid rgba(255,255,255,0.06)', fontSize: '0.8rem' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', color: enrichQa ? 'var(--accent-cyan)' : 'var(--text-muted)' }}>
+            <input type="checkbox" checked={enrichQa} onChange={(e) => setEnrichQa(e.target.checked)} />
+            <Sparkles size={14} /> Synthetic Q&A Expansion (Ollama)
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', color: parentChild ? 'var(--accent-cyan)' : 'var(--text-muted)' }}>
+            <input type="checkbox" checked={parentChild} onChange={(e) => setParentChild(e.target.checked)} />
+            <GitBranch size={14} /> Parent-Child Hierarchical Indexing
+          </label>
         </div>
       </div>
 
@@ -292,6 +306,13 @@ export const DocumentManager: React.FC<Props> = ({
                       <div style={{ fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
                         {chunk.content}
                       </div>
+
+                      {chunk.parent_content && chunk.parent_content.strip !== '' && (
+                        <div style={{ marginTop: '0.5rem', padding: '0.5rem', background: 'rgba(56, 189, 248, 0.08)', borderRadius: '6px', borderLeft: '3px solid var(--accent-cyan)', fontSize: '0.78rem' }}>
+                          <span style={{ color: 'var(--accent-cyan)', fontWeight: 600, display: 'block', marginBottom: '0.2rem' }}>Parent Context Window:</span>
+                          <span style={{ color: 'var(--text-muted)' }}>{chunk.parent_content}</span>
+                        </div>
+                      )}
 
                       {hasEmbedding && isExpanded && (
                         <div style={{ marginTop: '0.6rem', paddingTop: '0.5rem', borderTop: '1px dashed var(--border-color)' }}>

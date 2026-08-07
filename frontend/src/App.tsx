@@ -68,8 +68,8 @@ export function App() {
     }
   };
 
-  const handleUploadDocuments = async (files: File[], folder: string) => {
-    await api.uploadDocuments(selectedDbId, files, folder);
+  const handleUploadDocuments = async (files: File[], folder: string, enrichQa: boolean = false, parentChild: boolean = false) => {
+    await api.uploadDocuments(selectedDbId, files, folder, enrichQa, parentChild);
     await loadDocuments(selectedDbId);
     await loadDatabases();
   };

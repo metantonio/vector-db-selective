@@ -44,10 +44,18 @@ export async function fetchDocuments(dbId: string): Promise<DocumentItem[]> {
   return res.json();
 }
 
-export async function uploadDocuments(dbId: string, files: File[], folder: string = 'General'): Promise<any> {
+export async function uploadDocuments(
+  dbId: string,
+  files: File[],
+  folder: string = 'General',
+  enrichQa: boolean = false,
+  parentChild: boolean = false
+): Promise<any> {
   const formData = new FormData();
   files.forEach((f) => formData.append('files', f));
   formData.append('folder', folder);
+  formData.append('enrich_qa', String(enrichQa));
+  formData.append('parent_child', String(parentChild));
 
   const res = await fetch(`${API_BASE}/databases/${dbId}/upload`, {
     method: 'POST',
