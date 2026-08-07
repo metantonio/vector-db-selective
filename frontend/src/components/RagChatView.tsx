@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Send, Bot, User, FileText, ChevronDown, ChevronUp, Cpu, RefreshCw } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 import { QueryResponse, ChunkResult, OllamaStatus } from '../types';
 import * as api from '../api';
 
@@ -242,7 +243,9 @@ export const RagChatView: React.FC<Props> = ({ dbId, onQuery }) => {
                 </div>
               )}
 
-              <div style={{ whiteSpace: 'pre-wrap' }}>{msg.text}</div>
+              <div className="markdown-content">
+                <ReactMarkdown>{msg.text}</ReactMarkdown>
+              </div>
 
               {msg.chunks && msg.chunks.length > 0 && (
                 <div style={{ marginTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '0.5rem' }}>
@@ -308,27 +311,70 @@ export const RagChatView: React.FC<Props> = ({ dbId, onQuery }) => {
             )}
           </div>
         ))}
+
+        {/* AI Loading & Thinking Indicator */}
+        {loading && (
+          <div style={{ display: 'flex', gap: '0.75rem', alignSelf: 'flex-start', maxWidth: '85%' }}>
+            <div
+              style={{
+                width: '32px',
+                height: '32px',
+                borderRadius: '8px',
+                background: 'linear-gradient(135deg, #10b981, #06b6d4)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'white',
+                flexShrink: 0,
+              }}
+            >
+              <Bot size={18} className="spin" />
+            </div>
+            <div
+              style={{
+                background: 'rgba(15, 23, 42, 0.8)',
+                color: 'var(--accent-cyan)',
+                padding: '0.85rem 1.1rem',
+                borderRadius: '12px 12px 12px 2px',
+                border: '1px solid rgba(6, 182, 212, 0.4)',
+                fontSize: '0.9rem',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.6rem',
+                boxShadow: '0 0 15px rgba(6, 182, 212, 0.15)',
+              }}
+            >
+              <RefreshCw size={16} className="spin" />
+              <span>Thinking & generating answer with <strong>{selectedModel || 'AI Engine'}</strong>...</span>
+            </div>
+          </div>
+        )}
       </div>
 
-      {/* Input */}
+      {/* Input Form */}
       <form onSubmit={handleSend} style={{ display: 'flex', gap: '0.75rem', marginTop: '1rem' }}>
         <input
           type="text"
           className="input-field"
           style={{ marginTop: 0 }}
+          disabled={loading}
           placeholder={
-            ollamaStatus?.available && useOllama
+            loading
+              ? `🤖 AI is generating answer for "${dbId}"...`
+              : ollamaStatus?.available && useOllama
               ? `Ask a question (Ollama LLM active on "${dbId}")...`
               : `Ask a question based on database "${dbId}"...`
           }
           value={input}
           onChange={(e) => setInput(e.target.value)}
         />
-        <button type="submit" className="btn btn-primary" disabled={loading}>
-          <Send size={16} /> Send
+        <button type="submit" className="btn btn-primary" disabled={loading || !input.trim()}>
+          {loading ? <RefreshCw size={16} className="spin" /> : <Send size={16} />}
+          {loading ? 'Thinking...' : 'Send'}
         </button>
       </form>
     </div>
   );
 };
+
 

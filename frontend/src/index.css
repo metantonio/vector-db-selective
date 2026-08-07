@@ -369,3 +369,53 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+/* Markdown Content Formatting */
+.markdown-content p {
+  margin-bottom: 0.5rem;
+}
+.markdown-content p:last-child {
+  margin-bottom: 0;
+}
+.markdown-content h1, .markdown-content h2, .markdown-content h3 {
+  font-size: 1.05rem;
+  font-weight: 700;
+  margin-top: 0.75rem;
+  margin-bottom: 0.4rem;
+  color: var(--accent-cyan);
+}
+.markdown-content ul, .markdown-content ol {
+  padding-left: 1.25rem;
+  margin-bottom: 0.5rem;
+}
+.markdown-content li {
+  margin-bottom: 0.25rem;
+}
+.markdown-content code {
+  font-family: var(--font-mono);
+  background: rgba(0, 0, 0, 0.4);
+  padding: 0.15rem 0.4rem;
+  border-radius: 4px;
+  font-size: 0.825rem;
+  color: #38bdf8;
+}
+.markdown-content pre {
+  background: rgba(15, 23, 42, 0.9);
+  padding: 0.75rem;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0.5rem 0;
+  border: 1px solid var(--border-color);
+}
+.markdown-content pre code {
+  background: transparent;
+  padding: 0;
+}
+.markdown-content blockquote {
+  border-left: 3px solid var(--accent-cyan);
+  padding-left: 0.75rem;
+  color: var(--text-muted);
+  font-style: italic;
+  margin: 0.5rem 0;
+}
+
+
