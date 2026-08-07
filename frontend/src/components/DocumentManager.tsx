@@ -30,6 +30,7 @@ export const DocumentManager: React.FC<Props> = ({
   const [chunks, setChunks] = useState<any[]>([]);
   const [loadingChunks, setLoadingChunks] = useState(false);
   const [chunkFilter, setChunkFilter] = useState('');
+  const [showEmbeddings, setShowEmbeddings] = useState<Record<string, boolean>>({});
 
   const handleFiles = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
@@ -253,25 +254,67 @@ export const DocumentManager: React.FC<Props> = ({
               ) : filteredChunks.length === 0 ? (
                 <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>No matching chunks found.</div>
               ) : (
-                filteredChunks.map((chunk) => (
-                  <div
-                    key={chunk.chunk_id}
-                    style={{
-                      background: 'rgba(15, 23, 42, 0.7)',
-                      border: '1px solid var(--border-color)',
-                      borderRadius: '8px',
-                      padding: '0.85rem',
-                    }}
-                  >
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.4rem', fontSize: '0.75rem', fontFamily: 'var(--font-mono)' }}>
-                      <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>Chunk #{chunk.chunk_index + 1}</span>
-                      <span style={{ color: 'var(--text-muted)' }}>{chunk.content.length} chars</span>
+                filteredChunks.map((chunk) => {
+                  const hasEmbedding = chunk.embedding && Object.keys(chunk.embedding).length > 0;
+                  const isExpanded = showEmbeddings[chunk.chunk_id];
+                  return (
+                    <div
+                      key={chunk.chunk_id}
+                      style={{
+                        background: 'rgba(15, 23, 42, 0.7)',
+                        border: '1px solid var(--border-color)',
+                        borderRadius: '8px',
+                        padding: '0.85rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem', fontSize: '0.75rem', fontFamily: 'var(--font-mono)' }}>
+                        <span style={{ color: 'var(--accent-cyan)', fontWeight: 600 }}>Chunk #{chunk.chunk_index + 1}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+                          <span style={{ color: 'var(--text-muted)' }}>{chunk.content.length} chars</span>
+                          {hasEmbedding && (
+                            <button
+                              onClick={() => setShowEmbeddings(prev => ({ ...prev, [chunk.chunk_id]: !prev[chunk.chunk_id] }))}
+                              style={{
+                                background: isExpanded ? 'rgba(56, 189, 248, 0.2)' : 'rgba(255, 255, 255, 0.05)',
+                                border: '1px solid var(--border-color)',
+                                borderRadius: '4px',
+                                color: isExpanded ? 'var(--accent-cyan)' : 'var(--text-muted)',
+                                padding: '0.15rem 0.4rem',
+                                fontSize: '0.7rem',
+                                cursor: 'pointer',
+                              }}
+                            >
+                              {isExpanded ? 'Hide Vector Embedding' : 'View Vector Embedding'}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
+                        {chunk.content}
+                      </div>
+
+                      {hasEmbedding && isExpanded && (
+                        <div style={{ marginTop: '0.6rem', paddingTop: '0.5rem', borderTop: '1px dashed var(--border-color)' }}>
+                          <div style={{ fontSize: '0.7rem', color: 'var(--accent-cyan)', fontWeight: 600, marginBottom: '0.3rem', fontFamily: 'var(--font-mono)' }}>
+                            Vector Embedding (TF-IDF Term Weights):
+                          </div>
+                          <pre style={{
+                            background: '#0d1117',
+                            padding: '0.5rem',
+                            borderRadius: '4px',
+                            fontSize: '0.75rem',
+                            maxHeight: '140px',
+                            overflowY: 'auto',
+                            color: '#7ee787',
+                            margin: 0,
+                          }}>
+                            {JSON.stringify(chunk.embedding, null, 2)}
+                          </pre>
+                        </div>
+                      )}
                     </div>
-                    <div style={{ fontSize: '0.85rem', color: 'var(--text-main)', lineHeight: 1.5, whiteSpace: 'pre-wrap' }}>
-                      {chunk.content}
-                    </div>
-                  </div>
-                ))
+                  );
+                })
               )}
             </div>
           </div>
@@ -280,4 +323,5 @@ export const DocumentManager: React.FC<Props> = ({
     </div>
   );
 };
+
 

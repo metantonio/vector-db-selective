@@ -26,6 +26,7 @@ export interface ChunkResult {
   score: number;
   chunk_index: number;
   folder: string;
+  embedding?: Record<string, number>;
 }
 
 export interface QueryResponse {

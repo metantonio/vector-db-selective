@@ -315,11 +315,11 @@ class VectorEngine:
             ]
 
     def get_document_chunks(self, doc_id: str) -> List[Dict[str, Any]]:
-        """Get all text chunks for a specific document ordered by chunk_index."""
+        """Get all text chunks for a specific document ordered by chunk_index, including vector embeddings."""
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT id, document_id, filename, chunk_index, content FROM chunks WHERE document_id = ? ORDER BY chunk_index ASC",
+                "SELECT id, document_id, filename, chunk_index, content, embedding FROM chunks WHERE document_id = ? ORDER BY chunk_index ASC",
                 (doc_id,)
             )
             rows = cursor.fetchall()
@@ -329,7 +329,8 @@ class VectorEngine:
                     "document_id": r[1],
                     "filename": r[2],
                     "chunk_index": r[3],
-                    "content": r[4]
+                    "content": r[4],
+                    "embedding": json.loads(r[5]) if r[5] else {}
                 }
                 for r in rows
             ]
@@ -376,7 +377,9 @@ class VectorEngine:
                     "score": round(score, 4),
                     "chunk_index": chunk_idx,
                     "folder": doc_folder or "General",
+                    "embedding": emb_vec,
                 })
 
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:top_k]
+
