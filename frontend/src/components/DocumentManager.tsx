@@ -197,13 +197,14 @@ export const DocumentManager: React.FC<Props> = ({
                   <span style={{ fontSize: '0.875rem', fontWeight: 600, color: enrichQa ? 'var(--accent-cyan)' : 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
                     <Sparkles size={15} style={{ color: 'var(--accent-cyan)' }} /> Synthetic Q&A Expansion
                   </span>
-                  <span className="file-tag-pill" style={{ background: 'rgba(6, 182, 212, 0.12)', color: 'var(--accent-cyan)' }}>
-                    Ollama LLM
+                  <span className="file-tag-pill" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#10b981', border: '1px solid rgba(16, 185, 129, 0.3)' }}>
+                    🔒 Local LLM Exclusive (Zero API Cost)
                   </span>
                 </div>
                 <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-                  Generates 2–3 questions per chunk using your LLM to match natural user queries.
+                  Generates 2–3 questions per chunk using your local LLM (llama.cpp / Ollama) to match natural user queries without API token costs.
                 </p>
+
               </div>
             </div>
 

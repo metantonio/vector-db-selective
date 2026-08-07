@@ -34,8 +34,11 @@ class QueryRequest(BaseModel):
     query: str = Field(..., description="User question or prompt for RAG synthesis")
     top_k: int = Field(4, ge=1, le=10)
     system_instruction: Optional[str] = Field(None, description="Optional custom system prompt for LLM")
-    use_ollama: bool = Field(True, description="Whether to use Ollama for response generation if available")
-    model: Optional[str] = Field(None, description="Ollama model name (e.g. llama3, mistral, llama3.2)")
+    use_ollama: bool = Field(True, description="Whether to use LLM for response generation")
+    provider: Optional[str] = Field("local", description="LLM provider: local, openai, claude, openrouter, gemini")
+    model: Optional[str] = Field(None, description="Model ID")
+    api_key: Optional[str] = Field(None, description="Optional API key override")
+
 
 class QueryResponse(BaseModel):
     answer: str

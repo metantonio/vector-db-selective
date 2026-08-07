@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Send, Bot, User, FileText, ChevronDown, ChevronUp, Cpu, RefreshCw } from 'lucide-react';
+import { Send, Bot, User, FileText, ChevronDown, ChevronUp, Cpu, RefreshCw, Key, ShieldCheck } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { QueryResponse, ChunkResult, OllamaStatus } from '../types';
 import * as api from '../api';
@@ -19,9 +19,18 @@ interface Props {
     topK: number,
     useOllama: boolean,
     model?: string,
-    systemInstruction?: string
+    systemInstruction?: string,
+    provider?: string,
+    apiKey?: string
   ) => Promise<QueryResponse>;
 }
+
+const PROVIDER_MODELS: Record<string, string[]> = {
+  openai: ['gpt-4o-mini', 'gpt-4o', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+  claude: ['claude-3-5-sonnet-20241022', 'claude-3-haiku-20240307', 'claude-3-opus-20240229'],
+  openrouter: ['anthropic/claude-3.5-sonnet', 'meta-llama/llama-3.3-70b-instruct', 'google/gemini-2.0-flash-001', 'openai/gpt-4o'],
+  gemini: ['gemini-2.0-flash', 'gemini-1.5-flash', 'gemini-1.5-pro'],
+};
 
 export const RagChatView: React.FC<Props> = ({ dbId, onQuery }) => {
   const [messages, setMessages] = useState<Message[]>([
@@ -34,10 +43,14 @@ export const RagChatView: React.FC<Props> = ({ dbId, onQuery }) => {
   const [loading, setLoading] = useState(false);
   const [expandedChunks, setExpandedChunks] = useState<Record<number, boolean>>({});
 
-  // Ollama states
-  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus | null>(null);
-  const [useOllama, setUseOllama] = useState<boolean>(true);
+  // LLM Provider & Model States
+  const [provider, setProvider] = useState<string>('local');
   const [selectedModel, setSelectedModel] = useState<string>('');
+  const [apiKey, setApiKey] = useState<string>('');
+  const [showApiKeyInput, setShowApiKeyInput] = useState<boolean>(false);
+
+  // Local Ollama states
+  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatus | null>(null);
   const [checkingOllama, setCheckingOllama] = useState<boolean>(false);
 
   const checkOllama = async () => {
@@ -45,7 +58,7 @@ export const RagChatView: React.FC<Props> = ({ dbId, onQuery }) => {
     try {
       const status = await api.fetchOllamaStatus();
       setOllamaStatus(status);
-      if (status.available && status.models.length > 0) {
+      if (provider === 'local' && status.available && status.models.length > 0) {
         if (!selectedModel || !status.models.includes(selectedModel)) {
           setSelectedModel(status.default_model || status.models[0]);
         }
@@ -61,47 +74,106 @@ export const RagChatView: React.FC<Props> = ({ dbId, onQuery }) => {
     checkOllama();
   }, []);
 
+  const handleProviderChange = (newProvider: string) => {
+    setProvider(newProvider);
+    if (newProvider === 'local') {
+      if (ollamaStatus?.available && ollamaStatus.models.length > 0) {
+        setSelectedModel(ollamaStatus.default_model || ollamaStatus.models[0]);
+      } else {
+        setSelectedModel('llama.cpp');
+      }
+    } else {
+      const defaultM = PROVIDER_MODELS[newProvider]?.[0] || '';
+      setSelectedModel(defaultM);
+    }
+  };
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || loading) return;
 
     const userText = input.trim();
     setInput('');
-    setMessages((prev) => [...prev, { sender: 'user', text: userText }]);
+
+    // Add user message & empty assistant placeholder for streaming tokens
+    const userMsg: Message = { sender: 'user', text: userText };
+    const assistantPlaceholder: Message = {
+      sender: 'assistant',
+      text: '',
+      ollamaActive: true,
+      modelUsed: `${provider.toUpperCase()} (${selectedModel || 'AI'})`
+    };
+
+    setMessages((prev) => [...prev, userMsg, assistantPlaceholder]);
     setLoading(true);
 
     try {
-      const response = await onQuery(userText, 4, useOllama, selectedModel);
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: 'assistant',
-          text: response.answer,
-          chunks: response.context_chunks,
-          ollamaActive: response.ollama_active,
-          modelUsed: response.model_used,
+      await api.queryRagEngineStream(
+        dbId,
+        userText,
+        4,
+        true,
+        selectedModel,
+        undefined,
+        provider,
+        apiKey,
+        (meta) => {
+          setMessages((prev) => {
+            if (prev.length === 0) return prev;
+            const lastIdx = prev.length - 1;
+            const last = prev[lastIdx];
+            if (last.sender !== 'assistant') return prev;
+            return [
+              ...prev.slice(0, lastIdx),
+              { ...last, chunks: meta.chunks, modelUsed: meta.modelUsed }
+            ];
+          });
         },
-      ]);
+        (token) => {
+          setMessages((prev) => {
+            if (prev.length === 0) return prev;
+            const lastIdx = prev.length - 1;
+            const last = prev[lastIdx];
+            if (last.sender !== 'assistant') return prev;
+            return [
+              ...prev.slice(0, lastIdx),
+              { ...last, text: (last.text || '') + token }
+            ];
+          });
+        }
+      );
     } catch (err: any) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          sender: 'assistant',
-          text: `⚠️ Error querying database **${dbId}**: ${err.message}`,
-        },
-      ]);
+      setMessages((prev) => {
+        if (prev.length === 0) return prev;
+        const lastIdx = prev.length - 1;
+        const last = prev[lastIdx];
+        if (last.sender !== 'assistant') return prev;
+        return [
+          ...prev.slice(0, lastIdx),
+          { ...last, text: `⚠️ Error querying database **${dbId}**: ${err.message}` }
+        ];
+      });
     } finally {
       setLoading(false);
     }
   };
 
+
+
   const toggleExpand = (index: number) => {
     setExpandedChunks((prev) => ({ ...prev, [index]: !prev[index] }));
   };
 
+  const getAvailableModels = (): string[] => {
+    if (provider === 'local') {
+      return ollamaStatus?.models || ['llama.cpp'];
+    }
+    return PROVIDER_MODELS[provider] || [];
+  };
+
   return (
     <div className="glass-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%', padding: '1.25rem' }}>
-      {/* Ollama Control Bar */}
+      {/* Multi-Provider LLM Control Bar */}
       <div
         style={{
           display: 'flex',
@@ -114,85 +186,115 @@ export const RagChatView: React.FC<Props> = ({ dbId, onQuery }) => {
           border: '1px solid var(--border-color)',
           fontSize: '0.85rem',
           flexWrap: 'wrap',
-          gap: '0.5rem',
+          gap: '0.75rem',
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
           <Cpu size={16} style={{ color: 'var(--accent-cyan)' }} />
-          <span style={{ fontWeight: 600, color: 'white' }}>Ollama LLM Engine:</span>
+          <span style={{ fontWeight: 600, color: 'white' }}>Chat Synthesis Engine:</span>
 
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-            <span
-              style={{
-                width: '8px',
-                height: '8px',
-                borderRadius: '50%',
-                backgroundColor: ollamaStatus?.available ? '#10b981' : '#ef4444',
-                boxShadow: ollamaStatus?.available ? '0 0 8px #10b981' : '0 0 8px #ef4444',
-              }}
-            />
-            <span style={{ color: ollamaStatus?.available ? '#10b981' : '#ef4444', fontSize: '0.8rem', fontWeight: 500 }}>
-              {checkingOllama
-                ? 'Checking...'
-                : ollamaStatus?.available
-                ? `Online (${ollamaStatus.url})`
-                : 'Offline (Fallback Mode)'}
-            </span>
-          </div>
-
-          <button
-            onClick={checkOllama}
-            title="Refresh Ollama status"
+          {/* Provider Selector */}
+          <select
+            value={provider}
+            onChange={(e) => handleProviderChange(e.target.value)}
             style={{
-              background: 'none',
-              border: 'none',
-              color: 'var(--text-muted)',
+              background: 'rgba(30, 41, 59, 0.9)',
+              color: 'white',
+              border: '1px solid var(--accent-cyan)',
+              borderRadius: '6px',
+              padding: '0.3rem 0.6rem',
+              fontSize: '0.8rem',
+              fontWeight: 600,
+              outline: 'none',
               cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
             }}
           >
-            <RefreshCw size={13} className={checkingOllama ? 'spin' : ''} />
-          </button>
-        </div>
+            <option value="local">🏠 Local LLM (llama.cpp / Ollama)</option>
+            <option value="openai">🟢 OpenAI (ChatGPT / GPT-4o)</option>
+            <option value="claude">🟣 Anthropic (Claude 3.5 Sonnet)</option>
+            <option value="openrouter">🌐 OpenRouter (Multi-Provider)</option>
+            <option value="gemini">🔷 Google Gemini (Gemini 2.0 / 1.5)</option>
+          </select>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          {ollamaStatus?.available && ollamaStatus.models.length > 0 && (
+          {/* Model Selector */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <label style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Model:</label>
+            <select
+              value={selectedModel}
+              onChange={(e) => setSelectedModel(e.target.value)}
+              style={{
+                background: 'rgba(30, 41, 59, 0.8)',
+                color: 'white',
+                border: '1px solid var(--border-color)',
+                borderRadius: '6px',
+                padding: '0.3rem 0.6rem',
+                fontSize: '0.8rem',
+                outline: 'none',
+                cursor: 'pointer',
+              }}
+            >
+              {getAvailableModels().map((m) => (
+                <option key={m} value={m}>
+                  {m}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {/* Local Status Indicator */}
+          {provider === 'local' && (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-              <label style={{ color: 'var(--text-muted)', fontSize: '0.8rem' }}>Model:</label>
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
+              <span
                 style={{
-                  background: 'rgba(30, 41, 59, 0.8)',
-                  color: 'white',
-                  border: '1px solid var(--border-color)',
-                  borderRadius: '4px',
-                  padding: '0.2rem 0.5rem',
-                  fontSize: '0.8rem',
-                  outline: 'none',
+                  width: '8px',
+                  height: '8px',
+                  borderRadius: '50%',
+                  backgroundColor: ollamaStatus?.available ? '#10b981' : '#ef4444',
+                  boxShadow: ollamaStatus?.available ? '0 0 8px #10b981' : '0 0 8px #ef4444',
                 }}
+              />
+              <span style={{ color: ollamaStatus?.available ? '#10b981' : '#ef4444', fontSize: '0.75rem', fontWeight: 500 }}>
+                {checkingOllama ? 'Checking...' : ollamaStatus?.available ? 'Online' : 'Offline'}
+              </span>
+              <button
+                onClick={checkOllama}
+                title="Refresh local LLM status"
+                style={{ background: 'none', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', display: 'flex', alignItems: 'center' }}
               >
-                {ollamaStatus.models.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+                <RefreshCw size={12} className={checkingOllama ? 'spin' : ''} />
+              </button>
             </div>
           )}
-
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', color: 'var(--text-muted)', fontSize: '0.8rem' }}>
-            <input
-              type="checkbox"
-              checked={useOllama}
-              onChange={(e) => setUseOllama(e.target.checked)}
-              style={{ accentColor: 'var(--accent-primary)', cursor: 'pointer' }}
-            />
-            Use Ollama AI
-          </label>
         </div>
+
+        {/* API Key Toggle for Cloud Providers */}
+        {provider !== 'local' && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            <button
+              type="button"
+              onClick={() => setShowApiKeyInput(!showApiKeyInput)}
+              className="btn btn-secondary"
+              style={{ padding: '0.25rem 0.5rem', fontSize: '0.75rem', color: apiKey ? 'var(--accent-cyan)' : 'var(--text-muted)' }}
+              title="Enter custom API key if not set in .env"
+            >
+              <Key size={13} /> {apiKey ? 'API Key Saved' : 'Custom API Key'}
+            </button>
+
+            {showApiKeyInput && (
+              <input
+                type="password"
+                className="input-field"
+                style={{ width: '180px', marginTop: 0, padding: '0.25rem 0.5rem', fontSize: '0.75rem' }}
+                value={apiKey}
+                onChange={(e) => setApiKey(e.target.value)}
+                placeholder={`Enter ${provider.toUpperCase()} API Key...`}
+              />
+            )}
+          </div>
+        )}
       </div>
+
+
 
       {/* Messages List */}
       <div style={{ flex: 1, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1rem', paddingRight: '0.5rem' }}>
@@ -239,13 +341,21 @@ export const RagChatView: React.FC<Props> = ({ dbId, onQuery }) => {
             >
               {msg.ollamaActive && (
                 <div style={{ fontSize: '0.75rem', color: '#10b981', fontWeight: 600, marginBottom: '0.3rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
-                  <Cpu size={12} /> Generated by Ollama ({msg.modelUsed || 'LLM'})
+                  <Cpu size={12} /> {msg.modelUsed || 'LLM Synthesis'}
                 </div>
               )}
 
-              <div className="markdown-content">
-                <ReactMarkdown>{msg.text}</ReactMarkdown>
-              </div>
+              {!msg.text ? (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--accent-cyan)', fontSize: '0.85rem' }}>
+                  <RefreshCw size={15} className="spin" />
+                  <span>Thinking & streaming response...</span>
+                </div>
+              ) : (
+                <div className="markdown-content">
+                  <ReactMarkdown>{msg.text}</ReactMarkdown>
+                </div>
+              )}
+
 
               {msg.chunks && msg.chunks.length > 0 && (
                 <div style={{ marginTop: '0.75rem', borderTop: '1px solid rgba(255,255,255,0.1)', paddingTop: '0.5rem' }}>
@@ -361,10 +471,9 @@ export const RagChatView: React.FC<Props> = ({ dbId, onQuery }) => {
           placeholder={
             loading
               ? `🤖 AI is generating answer for "${dbId}"...`
-              : ollamaStatus?.available && useOllama
-              ? `Ask a question (Ollama LLM active on "${dbId}")...`
-              : `Ask a question based on database "${dbId}"...`
+              : `Ask a question using ${provider.toUpperCase()} on "${dbId}"...`
           }
+
           value={input}
           onChange={(e) => setInput(e.target.value)}
         />

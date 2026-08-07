@@ -89,10 +89,13 @@ export function App() {
     topK: number,
     useOllama: boolean = true,
     model?: string,
-    systemInstruction?: string
+    systemInstruction?: string,
+    provider: string = 'local',
+    apiKey?: string
   ): Promise<QueryResponse> => {
-    return await api.queryRagEngine(selectedDbId, query, topK, useOllama, model, systemInstruction);
+    return await api.queryRagEngine(selectedDbId, query, topK, useOllama, model, systemInstruction, provider, apiKey);
   };
+
 
 
   return (

@@ -131,7 +131,9 @@ export async function queryRagEngine(
   topK: number = 4,
   useOllama: boolean = true,
   model?: string,
-  systemInstruction?: string
+  systemInstruction?: string,
+  provider: string = 'local',
+  apiKey?: string
 ): Promise<QueryResponse> {
   const res = await fetch(`${API_BASE}/databases/${dbId}/query`, {
     method: 'POST',
@@ -140,8 +142,10 @@ export async function queryRagEngine(
       query,
       top_k: topK,
       use_ollama: useOllama,
+      provider,
       model,
-      system_instruction: systemInstruction
+      system_instruction: systemInstruction,
+      api_key: apiKey,
     }),
   });
   if (!res.ok) {
@@ -150,4 +154,88 @@ export async function queryRagEngine(
   }
   return res.json();
 }
+
+export async function queryRagEngineStream(
+
+  dbId: string,
+  query: string,
+  topK: number = 4,
+  useOllama: boolean = true,
+  model?: string,
+  systemInstruction?: string,
+  provider: string = 'local',
+  apiKey?: string,
+  onMetadata?: (meta: { chunks: ChunkResult[]; modelUsed: string }) => void,
+  onToken?: (token: string) => void
+): Promise<void> {
+  const res = await fetch(`${API_BASE}/databases/${dbId}/query/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query,
+      top_k: topK,
+      use_ollama: useOllama,
+      provider,
+      model,
+      system_instruction: systemInstruction,
+      api_key: apiKey,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.detail || 'Streaming query failed');
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) return;
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const rawLine of lines) {
+      const line = rawLine.trim();
+      if (!line) continue;
+
+      try {
+        const payload = JSON.parse(line);
+        if (payload.type === 'metadata' && onMetadata) {
+          onMetadata({
+            chunks: payload.context_chunks || [],
+            modelUsed: payload.model_used || provider,
+          });
+        } else if (payload.type === 'token' && onToken && payload.token !== undefined) {
+          onToken(payload.token);
+        }
+      } catch (e) {
+        // ignore incomplete line
+      }
+    }
+  }
+
+  if (buffer.trim()) {
+    try {
+      const payload = JSON.parse(buffer.trim());
+      if (payload.type === 'metadata' && onMetadata) {
+        onMetadata({
+          chunks: payload.context_chunks || [],
+          modelUsed: payload.model_used || provider,
+        });
+      } else if (payload.type === 'token' && onToken && payload.token !== undefined) {
+        onToken(payload.token);
+      }
+    } catch (e) {}
+  }
+}
+
+
+
 
