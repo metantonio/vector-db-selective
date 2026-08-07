@@ -134,11 +134,24 @@ class VectorEngine:
 
     # --- Sentence-Window Chunking ---
 
-    def chunk_text(self, text: str, chunk_size: int = 400, overlap: int = 80) -> List[str]:
-        """Split text into sentence-aware sliding window chunks."""
+    def chunk_text(self, text: str, chunk_size: Optional[int] = None, overlap: Optional[int] = None) -> List[str]:
+        """Split text into sentence-aware sliding window chunks using environment or provided settings."""
+        if chunk_size is None:
+            try:
+                chunk_size = int(os.getenv("CHUNK_SIZE", "400"))
+            except ValueError:
+                chunk_size = 400
+
+        if overlap is None:
+            try:
+                overlap = int(os.getenv("CHUNK_OVERLAP", "80"))
+            except ValueError:
+                overlap = 80
+
         text = text.strip()
         if not text:
             return []
+
 
         sentences = re.split(r"(?<=[.!?])\s+", text)
         chunks = []
