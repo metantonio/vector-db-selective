@@ -172,12 +172,12 @@ class VectorEngine:
             pass
         return content
 
-    # --- Phase 1: Synthetic Question Generation (Ollama) ---
+    # --- Phase 1: Synthetic Question Generation (Ollama / llama.cpp / OpenAI) ---
 
     def generate_synthetic_questions(self, chunk_text: str) -> str:
-        """Generate 2-3 synthetic questions using local Ollama instance for a text chunk."""
+        """Generate 2-3 synthetic questions using local LLM server (Ollama, llama.cpp, or OpenAI-compatible server)."""
         ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
-        default_model = os.getenv("OLLAMA_DEFAULT_MODEL", "llama3")
+        default_model = os.getenv("OLLAMA_DEFAULT_MODEL", "llama.cpp")
 
         prompt = f"""Based on the following text excerpt, generate 2 or 3 short natural questions that can be directly answered by this text.
 Return ONLY the questions, separated by newlines, with no extra text or numbering.
@@ -185,9 +185,11 @@ Return ONLY the questions, separated by newlines, with no extra text or numberin
 Excerpt:
 {chunk_text[:1200]}"""
 
+        import httpx
+
+        # 1. Try Ollama native endpoint (/api/generate)
         try:
-            import httpx
-            with httpx.Client(timeout=8.0) as client:
+            with httpx.Client(timeout=10.0) as client:
                 res = client.post(
                     f"{ollama_url}/api/generate",
                     json={"model": default_model, "prompt": prompt, "stream": False}
@@ -195,10 +197,49 @@ Excerpt:
                 if res.status_code == 200:
                     data = res.json()
                     questions = data.get("response", "").strip()
-                    return questions
+                    if questions:
+                        return questions
         except Exception:
             pass
+
+        # 2. Try OpenAI-compatible / llama.cpp endpoint (/v1/chat/completions)
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                res = client.post(
+                    f"{ollama_url}/v1/chat/completions",
+                    json={
+                        "model": default_model,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": False
+                    }
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    choices = data.get("choices", [])
+                    if choices:
+                        questions = choices[0].get("message", {}).get("content", "").strip()
+                        if questions:
+                            return questions
+        except Exception:
+            pass
+
+        # 3. Try llama.cpp native completion endpoint (/completion)
+        try:
+            with httpx.Client(timeout=10.0) as client:
+                res = client.post(
+                    f"{ollama_url}/completion",
+                    json={"prompt": prompt, "temperature": 0.3}
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    questions = data.get("content", "").strip()
+                    if questions:
+                        return questions
+        except Exception as err:
+            print(f"[Synthetic Q&A Error] Failed to reach LLM at {ollama_url}: {err}")
+
         return ""
+
 
     # --- Hierarchical Sentence-Window Chunking & Phase 2 Parent-Child ---
 

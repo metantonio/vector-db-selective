@@ -58,7 +58,10 @@ def health_check():
 
 @app.get("/api/ollama/status", response_model=OllamaStatusResponse)
 async def check_ollama_status():
-    """Check if local Ollama service is reachable and list installed models."""
+    """Check if local LLM service (Ollama, llama.cpp, OpenAI-compatible) is reachable and list models."""
+    default_env_model = os.getenv("OLLAMA_DEFAULT_MODEL", "llama.cpp")
+
+    # 1. Check Ollama native /api/tags
     try:
         async with httpx.AsyncClient(timeout=3.0) as client:
             resp = await client.get(f"{OLLAMA_BASE_URL}/api/tags")
@@ -66,12 +69,44 @@ async def check_ollama_status():
                 data = resp.json()
                 raw_models = data.get("models", [])
                 models = [m.get("name") for m in raw_models if m.get("name")]
-                default_m = models[0] if models else None
+                default_m = models[0] if models else default_env_model
                 return OllamaStatusResponse(
                     available=True,
                     url=OLLAMA_BASE_URL,
-                    models=models,
+                    models=models or [default_env_model],
                     default_model=default_m
+                )
+    except Exception:
+        pass
+
+    # 2. Check OpenAI / llama.cpp /v1/models
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{OLLAMA_BASE_URL}/v1/models")
+            if resp.status_code == 200:
+                data = resp.json()
+                raw_models = data.get("data", [])
+                models = [m.get("id") for m in raw_models if m.get("id")]
+                default_m = models[0] if models else default_env_model
+                return OllamaStatusResponse(
+                    available=True,
+                    url=OLLAMA_BASE_URL,
+                    models=models or [default_m],
+                    default_model=default_m
+                )
+    except Exception:
+        pass
+
+    # 3. Check llama.cpp native /health
+    try:
+        async with httpx.AsyncClient(timeout=3.0) as client:
+            resp = await client.get(f"{OLLAMA_BASE_URL}/health")
+            if resp.status_code == 200:
+                return OllamaStatusResponse(
+                    available=True,
+                    url=OLLAMA_BASE_URL,
+                    models=[default_env_model],
+                    default_model=default_env_model
                 )
     except Exception:
         pass
@@ -236,11 +271,11 @@ async def query_rag_engine(db_id: str, req: QueryRequest):
             context_blocks.append(f"[Passage {i} - File: {c['filename']}]\n{c['text']}")
         context_str = "\n\n".join(context_blocks)
 
-        # 1. Attempt generation via Ollama if requested
+        # 1. Attempt generation via local LLM (Ollama / llama.cpp / OpenAI) if requested
         if req.use_ollama:
             status_info = await check_ollama_status()
             if status_info.available:
-                target_model = req.model or status_info.default_model or "llama3"
+                target_model = req.model or status_info.default_model or "llama.cpp"
 
                 system_prompt = (
                     req.system_instruction or 
@@ -254,16 +289,13 @@ async def query_rag_engine(db_id: str, req: QueryRequest):
                     f"Answer:"
                 )
 
-                payload = {
-                    "model": target_model,
-                    "prompt": prompt,
-                    "system": system_prompt,
-                    "stream": False
-                }
-
+                # 1. Try Ollama native /api/generate
                 try:
                     async with httpx.AsyncClient(timeout=60.0) as client:
-                        resp = await client.post(f"{OLLAMA_BASE_URL}/api/generate", json=payload)
+                        resp = await client.post(
+                            f"{OLLAMA_BASE_URL}/api/generate",
+                            json={"model": target_model, "prompt": prompt, "system": system_prompt, "stream": False}
+                        )
                         if resp.status_code == 200:
                             data = resp.json()
                             llm_answer = data.get("response", "").strip()
@@ -275,8 +307,58 @@ async def query_rag_engine(db_id: str, req: QueryRequest):
                                     ollama_active=True,
                                     model_used=target_model
                                 )
-                except Exception as err:
-                    # Logging Ollama connection error; falling back to excerpt summary
+                except Exception:
+                    pass
+
+                # 2. Try OpenAI / llama.cpp /v1/chat/completions
+                try:
+                    async with httpx.AsyncClient(timeout=60.0) as client:
+                        resp = await client.post(
+                            f"{OLLAMA_BASE_URL}/v1/chat/completions",
+                            json={
+                                "model": target_model,
+                                "messages": [
+                                    {"role": "system", "content": system_prompt},
+                                    {"role": "user", "content": prompt}
+                                ],
+                                "stream": False
+                            }
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            choices = data.get("choices", [])
+                            if choices:
+                                llm_answer = choices[0].get("message", {}).get("content", "").strip()
+                                if llm_answer:
+                                    return QueryResponse(
+                                        answer=llm_answer,
+                                        context_chunks=chunks,
+                                        database_id=db_id,
+                                        ollama_active=True,
+                                        model_used=target_model
+                                    )
+                except Exception:
+                    pass
+
+                # 3. Try llama.cpp native /completion
+                try:
+                    async with httpx.AsyncClient(timeout=60.0) as client:
+                        resp = await client.post(
+                            f"{OLLAMA_BASE_URL}/completion",
+                            json={"prompt": f"{system_prompt}\n\n{prompt}", "temperature": 0.3}
+                        )
+                        if resp.status_code == 200:
+                            data = resp.json()
+                            llm_answer = data.get("content", "").strip()
+                            if llm_answer:
+                                return QueryResponse(
+                                    answer=llm_answer,
+                                    context_chunks=chunks,
+                                    database_id=db_id,
+                                    ollama_active=True,
+                                    model_used=target_model
+                                )
+                except Exception:
                     pass
 
         # 2. Fallback: Generate structured context excerpt summary
