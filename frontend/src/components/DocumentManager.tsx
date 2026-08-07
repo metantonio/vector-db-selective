@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, FileText, Trash2, Folder, RefreshCw, Eye, Layers, X, Search, Sparkles, GitBranch } from 'lucide-react';
+import { UploadCloud, FileText, Trash2, Folder, RefreshCw, Eye, Layers, X, Search, Sparkles, GitBranch, Info } from 'lucide-react';
+
 import { DocumentItem } from '../types';
 import * as api from '../api';
 
@@ -88,26 +89,119 @@ export const DocumentManager: React.FC<Props> = ({
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem', height: '100%' }}>
-      {/* Upload Zone */}
+      {/* Document Ingestion Hub */}
       <div className="glass-panel" style={{ padding: '1.25rem' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+        {/* Header & Category Selection */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem', flexWrap: 'wrap', gap: '0.75rem' }}>
           <div>
-            <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>Ingest Documents into DB: <span style={{ color: 'var(--accent-cyan)' }}>{dbId}</span></h3>
-            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>Supported: PDF, DOCX, TXT, MD, CSV, JSON, HTML</p>
+            <h3 style={{ fontSize: '1.05rem', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+              <UploadCloud size={20} style={{ color: 'var(--accent-cyan)' }} />
+              Document Ingestion Hub
+              <span className="score-badge" style={{ fontSize: '0.75rem', fontWeight: 600 }}>DB: {dbId}</span>
+            </h3>
+            <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
+              Extract, clean, chunk, and index documents into your isolated vector store.
+            </p>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <Folder size={16} style={{ color: 'var(--text-muted)' }} />
+
+          {/* Folder Tag Selector */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'rgba(15, 23, 42, 0.6)', padding: '0.4rem 0.75rem', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+            <Folder size={16} style={{ color: 'var(--accent-cyan)' }} />
+            <span style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 500 }}>Category Tag:</span>
             <input
               type="text"
               className="input-field"
-              style={{ width: '140px', marginTop: 0, padding: '0.35rem 0.6rem' }}
+              style={{ width: '130px', marginTop: 0, padding: '0.25rem 0.5rem', fontSize: '0.8rem' }}
               value={folder}
               onChange={(e) => setFolder(e.target.value)}
-              placeholder="Folder tag"
+              placeholder="e.g. Manuals"
             />
+            {['General', 'Manuals', 'HR', 'Finance'].map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                onClick={() => setFolder(cat)}
+                style={{
+                  background: folder === cat ? 'var(--accent-primary)' : 'rgba(255,255,255,0.05)',
+                  border: '1px solid var(--border-color)',
+                  color: folder === cat ? '#fff' : 'var(--text-muted)',
+                  fontSize: '0.7rem',
+                  padding: '0.15rem 0.45rem',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s ease',
+                }}
+              >
+                {cat}
+              </button>
+            ))}
           </div>
         </div>
 
+        {/* Pipeline Feature Cards */}
+        <div style={{ marginBottom: '1.25rem' }}>
+          <div style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--text-muted)', marginBottom: '0.5rem', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+            <Info size={14} style={{ color: 'var(--accent-cyan)' }} />
+            Advanced Ingestion Pipeline Enhancements (Optional)
+          </div>
+          <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
+            {/* Card 1: Synthetic Q&A */}
+            <div
+              className={`pipeline-option-card ${enrichQa ? 'active' : ''}`}
+              onClick={() => { if (!uploading) setEnrichQa(!enrichQa); }}
+            >
+              <input
+                type="checkbox"
+                disabled={uploading}
+                checked={enrichQa}
+                onChange={() => {}}
+                style={{ marginTop: '0.2rem', cursor: 'pointer' }}
+              />
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.2rem' }}>
+                  <span style={{ fontSize: '0.875rem', fontWeight: 600, color: enrichQa ? 'var(--accent-cyan)' : 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <Sparkles size={15} style={{ color: 'var(--accent-cyan)' }} /> Synthetic Q&A Expansion
+                  </span>
+                  <span className="file-tag-pill" style={{ background: 'rgba(6, 182, 212, 0.12)', color: 'var(--accent-cyan)' }}>
+                    Ollama LLM
+                  </span>
+                </div>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                  Generates 2–3 questions per chunk using your LLM to match natural user queries.
+                </p>
+              </div>
+            </div>
+
+            {/* Card 2: Parent-Child Hierarchical */}
+            <div
+              className={`pipeline-option-card ${parentChild ? 'active' : ''}`}
+              onClick={() => { if (!uploading) setParentChild(!parentChild); }}
+            >
+              <input
+                type="checkbox"
+                disabled={uploading}
+                checked={parentChild}
+                onChange={() => {}}
+                style={{ marginTop: '0.2rem', cursor: 'pointer' }}
+              />
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.2rem' }}>
+                  <span style={{ fontSize: '0.875rem', fontWeight: 600, color: parentChild ? 'var(--accent-cyan)' : 'var(--text-main)', display: 'flex', alignItems: 'center', gap: '0.35rem' }}>
+                    <GitBranch size={15} style={{ color: 'var(--accent-emerald)' }} /> Parent-Child Indexing
+                  </span>
+                  <span className="file-tag-pill" style={{ background: 'rgba(16, 185, 129, 0.12)', color: 'var(--accent-emerald)' }}>
+                    Dual Tier
+                  </span>
+                </div>
+                <p style={{ fontSize: '0.78rem', color: 'var(--text-muted)', lineHeight: 1.4 }}>
+                  Indexes small chunks (~400c) for search precision while supplying full parent context (~1400c) to RAG.
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Dropzone */}
         <div
           className={`dropzone ${dragOver ? 'drag-over' : ''}`}
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
@@ -138,7 +232,7 @@ export const DocumentManager: React.FC<Props> = ({
                 </p>
                 <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
                   {enrichQa
-                    ? '🤖 Generating Synthetic Q&A pairs via Ollama & building vector index...'
+                    ? '🤖 Generating Synthetic Q&A pairs via LLM & building vector index...'
                     : parentChild
                     ? '🌳 Building Parent-Child context windows & computing vector embeddings...'
                     : '⚡ Extracting text, cleaning paragraphs, computing TF-IDF vectors & persisting chunks...'}
@@ -146,25 +240,18 @@ export const DocumentManager: React.FC<Props> = ({
               </div>
             </div>
           ) : (
-            <>
-              <UploadCloud size={32} style={{ color: 'var(--accent-primary)', marginBottom: '0.5rem' }} />
-              <p style={{ fontSize: '0.9rem', fontWeight: 500 }}>
-                Drag & drop files here, or click to browse
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.5rem' }}>
+              <UploadCloud size={36} style={{ color: 'var(--accent-primary)' }} />
+              <p style={{ fontSize: '0.95rem', fontWeight: 600 }}>
+                Drag & drop files here, or <span style={{ color: 'var(--accent-cyan)', textDecoration: 'underline' }}>click to browse</span>
               </p>
-            </>
+              <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'center', marginTop: '0.2rem' }}>
+                {['PDF', 'DOCX', 'TXT', 'MD', 'CSV', 'JSON', 'HTML'].map((ext) => (
+                  <span key={ext} className="file-tag-pill">{ext}</span>
+                ))}
+              </div>
+            </div>
           )}
-        </div>
-
-        {/* Phase 1 & Phase 2 Advanced Chunking Options */}
-        <div style={{ display: 'flex', gap: '1.5rem', marginTop: '0.8rem', paddingTop: '0.6rem', borderTop: '1px solid rgba(255,255,255,0.06)', fontSize: '0.8rem' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: uploading ? 'not-allowed' : 'pointer', color: enrichQa ? 'var(--accent-cyan)' : 'var(--text-muted)' }}>
-            <input type="checkbox" disabled={uploading} checked={enrichQa} onChange={(e) => setEnrichQa(e.target.checked)} />
-            <Sparkles size={14} /> Synthetic Q&A Expansion (Ollama)
-          </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: uploading ? 'not-allowed' : 'pointer', color: parentChild ? 'var(--accent-cyan)' : 'var(--text-muted)' }}>
-            <input type="checkbox" disabled={uploading} checked={parentChild} onChange={(e) => setParentChild(e.target.checked)} />
-            <GitBranch size={14} /> Parent-Child Hierarchical Indexing
-          </label>
         </div>
       </div>
 
