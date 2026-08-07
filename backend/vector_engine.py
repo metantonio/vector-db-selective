@@ -59,6 +59,18 @@ class VectorEngine:
             "file_size_bytes": file_size
         }
 
+    def _clean_text(self, text: str) -> str:
+        """Clean and normalize raw extracted text before chunking."""
+        if not text:
+            return ""
+        # Remove non-printable control characters except newlines and tabs
+        text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]", "", text)
+        # Normalize multiple spaces or tabs into a single space
+        text = re.sub(r"[ \t]+", " ", text)
+        # Normalize excessive newlines (3 or more) to double newlines (paragraphs)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        return text.strip()
+
     # --- Document Text Extraction ---
 
     def extract_text(self, file_path: Path, filename: str) -> str:
@@ -66,17 +78,19 @@ class VectorEngine:
         ext = filename.split(".")[-1].lower() if "." in filename else ""
 
         if ext == "pdf":
-            return self._extract_pdf(file_path)
+            raw = self._extract_pdf(file_path)
         elif ext == "docx":
-            return self._extract_docx(file_path)
+            raw = self._extract_docx(file_path)
         elif ext in ["html", "htm"]:
-            return self._extract_html(file_path)
+            raw = self._extract_html(file_path)
         elif ext == "json":
-            return self._extract_json(file_path)
+            raw = self._extract_json(file_path)
         elif ext == "csv":
-            return self._extract_csv(file_path)
+            raw = self._extract_csv(file_path)
         else:
-            return self._read_raw_text(file_path)
+            raw = self._read_raw_text(file_path)
+
+        return self._clean_text(raw)
 
     def _read_raw_text(self, file_path: Path) -> str:
         try:
@@ -130,59 +144,87 @@ class VectorEngine:
             return content
 
     def _extract_csv(self, file_path: Path) -> str:
-        return self._read_raw_text(file_path)
+        content = self._read_raw_text(file_path)
+        try:
+            import csv
+            lines = content.splitlines()
+            reader = csv.reader(lines)
+            rows = list(reader)
+            if not rows:
+                return content
+            header = rows[0]
+            formatted_rows = []
+            for r_idx, row in enumerate(rows[1:], start=1):
+                pairs = [f"{header[i]}: {row[i]}" for i in range(min(len(header), len(row))) if row[i].strip()]
+                if pairs:
+                    formatted_rows.append(f"Row {r_idx} -> " + "; ".join(pairs))
+            if formatted_rows:
+                return "\n".join(formatted_rows)
+        except Exception:
+            pass
+        return content
 
-    # --- Sentence-Window Chunking ---
+    # --- Hierarchical Sentence-Window Chunking ---
 
     def chunk_text(self, text: str, chunk_size: Optional[int] = None, overlap: Optional[int] = None) -> List[str]:
-        """Split text into sentence-aware sliding window chunks using environment or provided settings."""
+        """Split text into hierarchical, sentence-aware sliding window chunks using environment or provided settings."""
         if chunk_size is None:
             try:
-                chunk_size = int(os.getenv("CHUNK_SIZE", "400"))
+                chunk_size = int(os.getenv("CHUNK_SIZE", "600"))
             except ValueError:
-                chunk_size = 400
+                chunk_size = 600
 
         if overlap is None:
             try:
-                overlap = int(os.getenv("CHUNK_OVERLAP", "80"))
+                overlap = int(os.getenv("CHUNK_OVERLAP", "120"))
             except ValueError:
-                overlap = 80
+                overlap = 120
 
         text = text.strip()
         if not text:
             return []
 
+        # Split text into paragraphs first to preserve structural units
+        paragraphs = [p.strip() for p in text.split("\n\n") if p.strip()]
+        units = []
+        for p in paragraphs:
+            if len(p) <= chunk_size:
+                units.append(p)
+            else:
+                # If paragraph exceeds chunk_size, split by sentences or lines
+                sentences = re.split(r"(?<=[.!?])\s+|\n+", p)
+                for s in sentences:
+                    s_clean = s.strip()
+                    if s_clean:
+                        units.append(s_clean)
 
-        sentences = re.split(r"(?<=[.!?])\s+", text)
         chunks = []
         current_chunk = []
         current_len = 0
 
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence:
-                continue
-
-            if current_len + len(sentence) > chunk_size and current_chunk:
-                chunk_str = " ".join(current_chunk)
+        for unit in units:
+            unit_len = len(unit)
+            if current_len + unit_len > chunk_size and current_chunk:
+                chunk_str = "\n".join(current_chunk) if "\n" in "".join(current_chunk) else " ".join(current_chunk)
                 chunks.append(chunk_str)
 
                 overlap_chunk = []
                 overlap_len = 0
-                for s in reversed(current_chunk):
-                    if overlap_len + len(s) <= overlap:
-                        overlap_chunk.insert(0, s)
-                        overlap_len += len(s)
+                for u in reversed(current_chunk):
+                    if overlap_len + len(u) <= overlap:
+                        overlap_chunk.insert(0, u)
+                        overlap_len += len(u)
                     else:
                         break
                 current_chunk = overlap_chunk
                 current_len = overlap_len
 
-            current_chunk.append(sentence)
-            current_len += len(sentence)
+            current_chunk.append(unit)
+            current_len += unit_len
 
         if current_chunk:
-            chunks.append(" ".join(current_chunk))
+            chunk_str = "\n".join(current_chunk) if "\n" in "".join(current_chunk) else " ".join(current_chunk)
+            chunks.append(chunk_str)
 
         return chunks
 
@@ -211,7 +253,7 @@ class VectorEngine:
     # --- Document & Ingestion Operations ---
 
     def ingest_document(self, file_path: Path, filename: str, folder: str = "General") -> Dict[str, Any]:
-        """Extract, chunk, compute embeddings and persist document & chunks to SQLite."""
+        """Extract, clean, chunk with context metadata, compute embeddings and persist document & chunks to SQLite."""
         file_bytes = file_path.stat().st_size
         text_content = self.extract_text(file_path, filename)
         chunks = self.chunk_text(text_content)
@@ -221,6 +263,8 @@ class VectorEngine:
         uploaded_at = datetime.datetime.utcnow().isoformat()
         folder_clean = folder.strip() if folder and folder.strip() else "General"
 
+        header_prefix = f"[Source: {filename} | Folder: {folder_clean}]\n"
+
         with sqlite3.connect(self.db_path) as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -228,16 +272,18 @@ class VectorEngine:
                 (doc_id, filename, file_type, file_bytes, uploaded_at, len(chunks), folder_clean)
             )
 
-            for idx, chunk_text in enumerate(chunks):
+            for idx, raw_chunk_text in enumerate(chunks):
                 chunk_id = str(uuid.uuid4())
-                vector = self._compute_vector(chunk_text)
+                chunk_content = f"{header_prefix}{raw_chunk_text}"
+                vector = self._compute_vector(chunk_content)
                 vector_json = json.dumps(vector)
                 cursor.execute(
                     "INSERT INTO chunks VALUES (?, ?, ?, ?, ?, ?)",
-                    (chunk_id, doc_id, filename, idx, chunk_text, vector_json)
+                    (chunk_id, doc_id, filename, idx, chunk_content, vector_json)
                 )
 
             conn.commit()
+
 
         return {
             "id": doc_id,
