@@ -122,32 +122,56 @@ class DatabaseManager:
         }
 
     def delete_database(self, db_id: str) -> bool:
-        """Delete a vector database and its physical file."""
-        if db_id == "default":
-            # Don't delete registry entry for default, just reset its data
-            db_filepath = self.data_dir / "default.db"
-            if db_filepath.exists():
-                os.remove(db_filepath)
-            from vector_engine import VectorEngine
-            VectorEngine(db_filepath)
-            return True
+        """Delete a vector database and all its physical files on disk."""
+        import gc
+        import time
 
-        with sqlite3.connect(self.registry_db) as conn:
-            cursor = conn.cursor()
-            cursor.execute("SELECT db_filename FROM databases WHERE id = ?", (db_id,))
-            row = cursor.fetchone()
-            if not row:
-                return False
-            db_filename = row[0]
-            cursor.execute("DELETE FROM databases WHERE id = ?", (db_id,))
-            conn.commit()
+        db_filename = None
+        if db_id == "default":
+            db_filename = "default.db"
+        else:
+            with sqlite3.connect(self.registry_db) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT db_filename FROM databases WHERE id = ?", (db_id,))
+                row = cursor.fetchone()
+                if not row:
+                    return False
+                db_filename = row[0]
+                cursor.execute("DELETE FROM databases WHERE id = ?", (db_id,))
+                conn.commit()
+
+        # Force garbage collection to release any lingering SQLite handles
+        gc.collect()
 
         db_filepath = self.data_dir / db_filename
-        if db_filepath.exists():
-            try:
-                os.remove(db_filepath)
-            except Exception:
-                pass
+        base_path = str(db_filepath)
+
+        # Remove primary .db file as well as auxiliary SQLite journal/wal files
+        target_files = [
+            Path(base_path),
+            Path(base_path + "-journal"),
+            Path(base_path + "-wal"),
+            Path(base_path + "-shm"),
+        ]
+
+        for file_path in target_files:
+            if file_path.exists():
+                deleted = False
+                for attempt in range(4):
+                    try:
+                        os.remove(file_path)
+                        deleted = True
+                        break
+                    except Exception as err:
+                        gc.collect()
+                        time.sleep(0.15)
+                if not deleted:
+                    print(f"[Warning] Could not remove physical file {file_path}")
+
+        if db_id == "default":
+            from vector_engine import VectorEngine
+            VectorEngine(self.data_dir / "default.db")
+
         return True
 
     def get_engine(self, db_id: str):
