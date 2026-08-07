@@ -60,7 +60,8 @@ DATA_DIR=./data/databases
 
 # --- Ollama Local LLM Engine Settings ---
 OLLAMA_BASE_URL=http://localhost:11434
-OLLAMA_DEFAULT_MODEL=llama3
+OLLAMA_DEFAULT_MODEL=llama.cpp
+
 
 # --- Document Chunking Settings ---
 # Target chunk size in characters for text extraction

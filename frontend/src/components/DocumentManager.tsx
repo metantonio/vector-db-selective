@@ -101,32 +101,54 @@ export const DocumentManager: React.FC<Props> = ({
           onDrop={(e) => {
             e.preventDefault();
             setDragOver(false);
-            handleFiles(e.dataTransfer.files);
+            if (!uploading) handleFiles(e.dataTransfer.files);
           }}
-          onClick={() => fileInputRef.current?.click()}
+          onClick={() => { if (!uploading) fileInputRef.current?.click(); }}
+          style={{ cursor: uploading ? 'wait' : 'pointer' }}
         >
           <input
             type="file"
             ref={fileInputRef}
             multiple
+            disabled={uploading}
             style={{ display: 'none' }}
             accept=".pdf,.docx,.txt,.md,.csv,.json,.html,.htm"
             onChange={(e) => handleFiles(e.target.files)}
           />
-          <UploadCloud size={32} style={{ color: 'var(--accent-primary)', marginBottom: '0.5rem' }} />
-          <p style={{ fontSize: '0.9rem', fontWeight: 500 }}>
-            {uploading ? 'Processing & Indexing Vector Chunks...' : 'Drag & drop files here, or click to browse'}
-          </p>
+          {uploading ? (
+            <div style={{ padding: '0.75rem', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.6rem' }}>
+              <RefreshCw size={32} className="spin" style={{ color: 'var(--accent-cyan)' }} />
+              <div>
+                <p style={{ fontSize: '0.95rem', fontWeight: 600, color: 'var(--accent-cyan)', marginBottom: '0.2rem' }}>
+                  Processing & Indexing Document(s) in Backend...
+                </p>
+                <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+                  {enrichQa
+                    ? '🤖 Generating Synthetic Q&A pairs via Ollama & building vector index...'
+                    : parentChild
+                    ? '🌳 Building Parent-Child context windows & computing vector embeddings...'
+                    : '⚡ Extracting text, cleaning paragraphs, computing TF-IDF vectors & persisting chunks...'}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <>
+              <UploadCloud size={32} style={{ color: 'var(--accent-primary)', marginBottom: '0.5rem' }} />
+              <p style={{ fontSize: '0.9rem', fontWeight: 500 }}>
+                Drag & drop files here, or click to browse
+              </p>
+            </>
+          )}
         </div>
 
         {/* Phase 1 & Phase 2 Advanced Chunking Options */}
         <div style={{ display: 'flex', gap: '1.5rem', marginTop: '0.8rem', paddingTop: '0.6rem', borderTop: '1px solid rgba(255,255,255,0.06)', fontSize: '0.8rem' }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', color: enrichQa ? 'var(--accent-cyan)' : 'var(--text-muted)' }}>
-            <input type="checkbox" checked={enrichQa} onChange={(e) => setEnrichQa(e.target.checked)} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: uploading ? 'not-allowed' : 'pointer', color: enrichQa ? 'var(--accent-cyan)' : 'var(--text-muted)' }}>
+            <input type="checkbox" disabled={uploading} checked={enrichQa} onChange={(e) => setEnrichQa(e.target.checked)} />
             <Sparkles size={14} /> Synthetic Q&A Expansion (Ollama)
           </label>
-          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: 'pointer', color: parentChild ? 'var(--accent-cyan)' : 'var(--text-muted)' }}>
-            <input type="checkbox" checked={parentChild} onChange={(e) => setParentChild(e.target.checked)} />
+          <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', cursor: uploading ? 'not-allowed' : 'pointer', color: parentChild ? 'var(--accent-cyan)' : 'var(--text-muted)' }}>
+            <input type="checkbox" disabled={uploading} checked={parentChild} onChange={(e) => setParentChild(e.target.checked)} />
             <GitBranch size={14} /> Parent-Child Hierarchical Indexing
           </label>
         </div>
@@ -136,10 +158,30 @@ export const DocumentManager: React.FC<Props> = ({
       <div className="glass-panel" style={{ flex: 1, padding: '1.25rem', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <h3 style={{ fontSize: '1rem', fontWeight: 600 }}>Indexed Documents ({documents.length})</h3>
-          <button className="btn btn-secondary" style={{ padding: '0.35rem 0.65rem' }} onClick={onRefresh}>
-            <RefreshCw size={14} /> Refresh
+          <button className="btn btn-secondary" style={{ padding: '0.35rem 0.65rem' }} onClick={onRefresh} disabled={uploading}>
+            <RefreshCw size={14} className={uploading ? 'spin' : ''} /> Refresh
           </button>
         </div>
+
+        {uploading && (
+          <div style={{
+            background: 'rgba(6, 182, 212, 0.12)',
+            border: '1px solid rgba(6, 182, 212, 0.3)',
+            borderRadius: '8px',
+            padding: '0.75rem 1rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.75rem',
+            marginBottom: '1rem',
+            fontSize: '0.85rem',
+            color: 'var(--accent-cyan)'
+          }}>
+            <RefreshCw size={18} className="spin" />
+            <div>
+              <strong>Ingestion Active:</strong> The backend is extracting text, creating chunks, computing embeddings, and saving to SQLite DB <code>{dbId}</code>.
+            </div>
+          </div>
+        )}
 
         {loading ? (
           <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--text-muted)' }}>Loading documents...</div>
