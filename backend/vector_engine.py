@@ -621,4 +621,103 @@ Excerpt:
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:top_k]
 
+    def export_jsonl(
+        self,
+        format: str = "messages",
+        synthetic_only: bool = False,
+        doc_ids: Optional[List[str]] = None,
+        system_prompt: Optional[str] = None
+    ) -> str:
+        """Export database chunks/synthetic Q&A pairs into JSONL format for fine-tuning LLMs."""
+        fmt = (format or "messages").lower().strip()
+        sys_prompt = system_prompt or "You are a helpful domain assistant trained on document context."
+
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            if doc_ids:
+                placeholders = ",".join(["?"] * len(doc_ids))
+                cursor.execute(
+                    f"SELECT c.id, c.document_id, c.filename, c.content, d.folder, c.parent_content FROM chunks c JOIN documents d ON c.document_id = d.id WHERE c.document_id IN ({placeholders}) ORDER BY c.document_id, c.chunk_index",
+                    doc_ids
+                )
+            else:
+                cursor.execute(
+                    "SELECT c.id, c.document_id, c.filename, c.content, d.folder, c.parent_content FROM chunks c JOIN documents d ON c.document_id = d.id ORDER BY c.document_id, c.chunk_index"
+                )
+            rows = cursor.fetchall()
+
+        json_lines = []
+
+        for r in rows:
+            chunk_id, doc_id, filename, content, folder, parent_text = r[0], r[1], r[2], r[3], r[4] or "General", r[5] or ""
+            
+            # Parse content to extract synthetic questions and clean raw text
+            synthetic_questions = []
+            clean_text = content
+
+            # Remove header prefix if present (e.g. [Source: filename | Folder: folder]\n)
+            header_match = re.match(r"^\[Source:.*?\]\n", clean_text)
+            if header_match:
+                clean_text = clean_text[header_match.end():]
+
+            # Extract synthetic questions block if present
+            sq_match = re.search(r"\[Synthetic Questions:\n(.*?)\]\n\n?", clean_text, flags=re.DOTALL)
+            if sq_match:
+                sq_raw = sq_match.group(1).strip()
+                synthetic_questions = [q.strip("- *").strip() for q in sq_raw.splitlines() if q.strip()]
+                clean_text = clean_text.replace(sq_match.group(0), "").strip()
+
+            # Prefer parent_text for context if present and non-empty
+            target_context = parent_text.strip() if parent_text and parent_text.strip() else clean_text.strip()
+            if not target_context:
+                continue
+
+            if synthetic_questions:
+                for q in synthetic_questions:
+                    if fmt == "alpaca":
+                        item = {
+                            "instruction": q,
+                            "input": f"Source: {filename} (Folder: {folder})",
+                            "output": target_context
+                        }
+                    elif fmt in ["completion", "prompt_completion"]:
+                        item = {
+                            "prompt": f"Context: {filename}\nQuestion: {q}\nAnswer:",
+                            "completion": f" {target_context}"
+                        }
+                    else:  # default: messages
+                        item = {
+                            "messages": [
+                                {"role": "system", "content": sys_prompt},
+                                {"role": "user", "content": q},
+                                {"role": "assistant", "content": target_context}
+                            ]
+                        }
+                    json_lines.append(json.dumps(item, ensure_ascii=False))
+            elif not synthetic_only:
+                # Standard chunk export without synthetic Q&A
+                if fmt == "alpaca":
+                    item = {
+                        "instruction": f"Provide detailed context and information from document {filename}.",
+                        "input": f"Folder: {folder}",
+                        "output": target_context
+                    }
+                elif fmt in ["completion", "prompt_completion"]:
+                    item = {
+                        "prompt": f"[Source: {filename}]\n",
+                        "completion": target_context
+                    }
+                else:  # default: messages
+                    item = {
+                        "messages": [
+                            {"role": "system", "content": sys_prompt},
+                            {"role": "user", "content": f"Please provide context regarding the content of {filename}."},
+                            {"role": "assistant", "content": target_context}
+                        ]
+                    }
+                json_lines.append(json.dumps(item, ensure_ascii=False))
+
+        return "\n".join(json_lines)
+
+
 

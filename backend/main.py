@@ -9,7 +9,7 @@ from typing import List, Optional, Dict, Any
 import httpx
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 
@@ -314,6 +314,41 @@ def enrich_missing_qa(db_id: str, doc_id: Optional[str] = None):
         }
     except ValueError as ve:
         raise HTTPException(status_code=404, detail=str(ve))
+
+
+@app.get("/api/databases/{db_id}/export/jsonl")
+def export_database_jsonl(
+    db_id: str,
+    format: Optional[str] = "messages",
+    synthetic_only: Optional[bool] = False,
+    doc_ids: Optional[str] = None,
+    system_prompt: Optional[str] = None
+):
+    """Export database documents/chunks into JSONL format for fine-tuning LLMs."""
+    try:
+        engine = db_manager.get_engine(db_id)
+        doc_id_list = [d.strip() for d in doc_ids.split(",") if d.strip()] if doc_ids else None
+        
+        jsonl_data = engine.export_jsonl(
+            format=format or "messages",
+            synthetic_only=bool(synthetic_only),
+            doc_ids=doc_id_list,
+            system_prompt=system_prompt
+        )
+
+        filename = f"{db_id}_finetune_{format or 'messages'}.jsonl"
+        return Response(
+            content=jsonl_data,
+            media_type="application/x-ndjson",
+            headers={
+                "Content-Disposition": f"attachment; filename=\"{filename}\""
+            }
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=404, detail=str(ve))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 
 

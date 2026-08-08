@@ -236,6 +236,26 @@ export async function queryRagEngineStream(
   }
 }
 
+export function getExportJsonlUrl(
+  dbId: string,
+  format: string = 'messages',
+  syntheticOnly: boolean = false,
+  docIds?: string[],
+  systemPrompt?: string
+): string {
+  const params = new URLSearchParams();
+  params.append('format', format);
+  params.append('synthetic_only', String(syntheticOnly));
+  if (docIds && docIds.length > 0) {
+    params.append('doc_ids', docIds.join(','));
+  }
+  if (systemPrompt && systemPrompt.trim()) {
+    params.append('system_prompt', systemPrompt.trim());
+  }
+  return `${API_BASE}/databases/${dbId}/export/jsonl?${params.toString()}`;
+}
+
+
 
 
 

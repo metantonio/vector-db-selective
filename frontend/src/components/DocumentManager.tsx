@@ -1,8 +1,9 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, FileText, Trash2, Folder, RefreshCw, Eye, Layers, X, Search, Sparkles, GitBranch, Info } from 'lucide-react';
+import { UploadCloud, FileText, Trash2, Folder, RefreshCw, Eye, Layers, X, Search, Sparkles, GitBranch, Info, Download, FileJson } from 'lucide-react';
 
 import { DocumentItem } from '../types';
 import * as api from '../api';
+import { ExportJsonlModal } from './ExportJsonlModal';
 
 interface Props {
   dbId: string;
@@ -36,6 +37,18 @@ export const DocumentManager: React.FC<Props> = ({
   const [showEmbeddings, setShowEmbeddings] = useState<Record<string, boolean>>({});
   const [enriching, setEnriching] = useState(false);
   const [activeTask, setActiveTask] = useState<any | null>(null);
+
+  // Export JSONL Modal State
+  const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [exportDocId, setExportDocId] = useState<string | undefined>(undefined);
+  const [exportDocName, setExportDocName] = useState<string | undefined>(undefined);
+
+  const handleOpenExportModal = (docId?: string, docName?: string) => {
+    setExportDocId(docId);
+    setExportDocName(docName);
+    setIsExportModalOpen(true);
+  };
+
 
   React.useEffect(() => {
     let interval: any;
@@ -343,6 +356,15 @@ export const DocumentManager: React.FC<Props> = ({
           <div style={{ display: 'flex', gap: '0.5rem' }}>
             <button
               className="btn btn-secondary"
+              style={{ padding: '0.35rem 0.65rem', color: 'var(--accent-primary)', borderColor: 'rgba(99, 102, 241, 0.4)' }}
+              onClick={() => handleOpenExportModal()}
+              disabled={uploading || enriching || documents.length === 0}
+              title="Export database content/chunks in JSONL format for fine-tuning LLMs"
+            >
+              <FileJson size={14} /> Export Fine-Tune (.jsonl)
+            </button>
+            <button
+              className="btn btn-secondary"
               style={{ padding: '0.35rem 0.65rem' }}
               onClick={() => handleEnrichMissingQa()}
               disabled={uploading || enriching}
@@ -355,6 +377,7 @@ export const DocumentManager: React.FC<Props> = ({
               <RefreshCw size={14} className={uploading ? 'spin' : ''} /> Refresh
             </button>
           </div>
+
         </div>
 
         {uploading && (
@@ -434,6 +457,14 @@ export const DocumentManager: React.FC<Props> = ({
                       <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.4rem' }}>
                         <button
                           className="btn btn-secondary"
+                          style={{ padding: '0.25rem 0.5rem', color: 'var(--accent-primary)' }}
+                          onClick={() => handleOpenExportModal(doc.id, doc.filename)}
+                          title="Export JSONL for this document"
+                        >
+                          <Download size={14} /> Export JSONL
+                        </button>
+                        <button
+                          className="btn btn-secondary"
                           style={{ padding: '0.25rem 0.5rem', color: 'var(--accent-cyan)' }}
                           onClick={() => handleEnrichMissingQa(doc.id)}
                           disabled={uploading || enriching}
@@ -449,6 +480,7 @@ export const DocumentManager: React.FC<Props> = ({
                         >
                           <Eye size={14} /> View Chunks
                         </button>
+
                         <button
                           className="btn btn-danger"
                           style={{ padding: '0.25rem 0.5rem' }}
@@ -586,8 +618,19 @@ export const DocumentManager: React.FC<Props> = ({
           </div>
         </div>
       )}
+
+      {/* Export JSONL Fine-Tune Modal */}
+      <ExportJsonlModal
+        isOpen={isExportModalOpen}
+        onClose={() => setIsExportModalOpen(false)}
+        dbId={dbId}
+        dbName={dbId}
+        selectedDocId={exportDocId}
+        selectedDocName={exportDocName}
+      />
     </div>
   );
 };
+
 
 
