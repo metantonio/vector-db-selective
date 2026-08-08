@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any
 import httpx
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, Response
+from fastapi.responses import StreamingResponse, Response, FileResponse
 from fastapi.staticfiles import StaticFiles
 
 
@@ -354,81 +354,164 @@ def export_database_jsonl(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/api/refine-jsonl")
-async def refine_existing_jsonl(file: UploadFile = File(...)):
-    """Upload an existing JSONL file and refine all question-answer pairs using the local LLM."""
+EXPORTS_DIR = Path(__file__).parent.parent / "data" / "exports"
+EXPORTS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def run_refinement_task(task_id: str, input_path: Path, output_path: Path, original_filename: str):
+    """Background worker that refines a JSONL file line-by-line with incremental disk writes & progress tracking."""
+    import time
     try:
-        content_bytes = await file.read()
-        text = content_bytes.decode("utf-8", errors="ignore")
-        lines = [line.strip() for line in text.splitlines() if line.strip()]
-
         engine = db_manager.get_engine("default")
-        refined_lines = []
+        raw_text = input_path.read_text(encoding="utf-8", errors="ignore")
+        lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        total_items = len(lines)
 
-        for line in lines:
+        active_ingestion_tasks[task_id] = {
+            "task_id": task_id,
+            "filename": original_filename,
+            "status": "processing",
+            "completed_chunks": 0,
+            "total_chunks": total_items,
+            "percentage": 0.0,
+            "elapsed_seconds": 0.0,
+            "avg_speed_sec": 0.0,
+            "eta_seconds": 0.0,
+            "status_message": f"Starting refinement for {original_filename} ({total_items} lines)..."
+        }
+
+        start_time = time.time()
+        
+        with open(output_path, "w", encoding="utf-8") as out_f:
+            for idx, line in enumerate(lines):
+                try:
+                    data = json.loads(line)
+                    filename = original_filename.replace(".jsonl", ".txt")
+
+                    # 1. Chat / Messages format
+                    if "messages" in data and isinstance(data["messages"], list):
+                        user_msg = next((m for m in data["messages"] if m.get("role") == "user"), None)
+                        assistant_msg = next((m for m in data["messages"] if m.get("role") == "assistant"), None)
+                        if user_msg and assistant_msg:
+                            q = user_msg.get("content", "")
+                            raw_a = assistant_msg.get("content", "")
+                            src_match = re.search(r"\[Source:\s*(.*?)(?:\s*\||\])", raw_a)
+                            if src_match:
+                                filename = src_match.group(1).strip()
+                            refined_a = engine.refine_answer(q, raw_a, filename)
+                            assistant_msg["content"] = refined_a
+                        out_f.write(json.dumps(data, ensure_ascii=False) + "\n")
+
+                    # 2. Alpaca format
+                    elif "instruction" in data and "output" in data:
+                        q = data.get("instruction", "")
+                        raw_a = data.get("output", "")
+                        inp = data.get("input", "")
+                        src_match = re.search(r"Source:\s*([^\s()]+)", inp)
+                        if src_match:
+                            filename = src_match.group(1).strip()
+                        refined_a = engine.refine_answer(q, raw_a, filename)
+                        data["output"] = refined_a
+                        out_f.write(json.dumps(data, ensure_ascii=False) + "\n")
+
+                    # 3. Prompt / Completion format
+                    elif "prompt" in data and "completion" in data:
+                        q = data.get("prompt", "")
+                        raw_a = data.get("completion", "")
+                        refined_a = engine.refine_answer(q, raw_a, filename)
+                        data["completion"] = f" {refined_a}"
+                        out_f.write(json.dumps(data, ensure_ascii=False) + "\n")
+
+                    else:
+                        out_f.write(line + "\n")
+                except Exception:
+                    out_f.write(line + "\n")
+
+                out_f.flush()
+
+                # Update live task metrics
+                now = time.time()
+                elapsed = now - start_time
+                completed = idx + 1
+                avg_speed = elapsed / completed if completed > 0 else 0
+                remaining = total_items - completed
+                eta_sec = remaining * avg_speed
+                pct = round((completed / total_items) * 100, 1)
+
+                active_ingestion_tasks[task_id].update({
+                    "completed_chunks": completed,
+                    "total_chunks": total_items,
+                    "percentage": pct,
+                    "elapsed_seconds": round(elapsed, 1),
+                    "avg_speed_sec": round(avg_speed, 2),
+                    "eta_seconds": round(eta_sec, 1),
+                    "status_message": f"Refining Line {completed}/{total_items} ({pct}%)"
+                })
+
+        active_ingestion_tasks[task_id]["status"] = "completed"
+        active_ingestion_tasks[task_id]["percentage"] = 100.0
+        active_ingestion_tasks[task_id]["status_message"] = f"Refinement complete for {original_filename}"
+
+    except Exception as err:
+        if task_id in active_ingestion_tasks:
+            active_ingestion_tasks[task_id]["status"] = "failed"
+            active_ingestion_tasks[task_id]["status_message"] = f"Refinement failed: {str(err)}"
+    finally:
+        if input_path.exists():
             try:
-                data = json.loads(line)
+                input_path.unlink()
             except Exception:
-                refined_lines.append(line)
-                continue
+                pass
 
-            # Infer filename source
-            filename = file.filename.replace(".jsonl", ".txt")
 
-            # 1. Chat / Messages format
-            if "messages" in data and isinstance(data["messages"], list):
-                user_msg = next((m for m in data["messages"] if m.get("role") == "user"), None)
-                assistant_msg = next((m for m in data["messages"] if m.get("role") == "assistant"), None)
-                if user_msg and assistant_msg:
-                    q = user_msg.get("content", "")
-                    raw_a = assistant_msg.get("content", "")
-                    
-                    # Try extracting source from raw answer if present
-                    src_match = re.search(r"\[Source:\s*(.*?)(?:\s*\||\])", raw_a)
-                    if src_match:
-                        filename = src_match.group(1).strip()
+@app.post("/api/refine-jsonl/start")
+async def start_refine_jsonl_task(file: UploadFile = File(...)):
+    """Upload a JSONL file and start an asynchronous background refinement task."""
+    try:
+        task_id = f"refine_{uuid.uuid4().hex[:8]}"
+        temp_input_path = EXPORTS_DIR / f"{task_id}_input.jsonl"
+        output_path = EXPORTS_DIR / f"{task_id}_refined.jsonl"
 
-                    refined_a = engine.refine_answer(q, raw_a, filename)
-                    assistant_msg["content"] = refined_a
-                refined_lines.append(json.dumps(data, ensure_ascii=False))
+        with open(temp_input_path, "wb") as f:
+            content = await file.read()
+            f.write(content)
 
-            # 2. Alpaca format
-            elif "instruction" in data and "output" in data:
-                q = data.get("instruction", "")
-                raw_a = data.get("output", "")
-                inp = data.get("input", "")
-                src_match = re.search(r"Source:\s*([^\s()]+)", inp)
-                if src_match:
-                    filename = src_match.group(1).strip()
+        import asyncio
+        asyncio.create_task(asyncio.to_thread(run_refinement_task, task_id, temp_input_path, output_path, file.filename))
 
-                refined_a = engine.refine_answer(q, raw_a, filename)
-                data["output"] = refined_a
-                refined_lines.append(json.dumps(data, ensure_ascii=False))
-
-            # 3. Prompt / Completion format
-            elif "prompt" in data and "completion" in data:
-                q = data.get("prompt", "")
-                raw_a = data.get("completion", "")
-                refined_a = engine.refine_answer(q, raw_a, filename)
-                data["completion"] = f" {refined_a}"
-                refined_lines.append(json.dumps(data, ensure_ascii=False))
-
-            else:
-                refined_lines.append(line)
-
-        output_content = "\n".join(refined_lines)
-        base_name = file.filename if file.filename.endswith(".jsonl") else f"{file.filename}.jsonl"
-        out_filename = base_name.replace(".jsonl", "_refined.jsonl")
-
-        return Response(
-            content=output_content,
-            media_type="application/x-ndjson",
-            headers={
-                "Content-Disposition": f"attachment; filename=\"{out_filename}\""
-            }
-        )
+        return {
+            "task_id": task_id,
+            "filename": file.filename,
+            "message": "Refinement task started successfully"
+        }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to refine JSONL file: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to start JSONL refinement: {str(e)}")
+
+
+@app.get("/api/refine-jsonl/tasks/{task_id}")
+def get_refine_task_status(task_id: str):
+    """Get live progress status of a JSONL refinement task."""
+    if task_id not in active_ingestion_tasks:
+        raise HTTPException(status_code=404, detail="Task not found")
+    return active_ingestion_tasks[task_id]
+
+
+@app.get("/api/refine-jsonl/download/{task_id}")
+def download_refined_jsonl(task_id: str):
+    """Download the refined JSONL output file from disk."""
+    output_path = EXPORTS_DIR / f"{task_id}_refined.jsonl"
+    if not output_path.exists():
+        raise HTTPException(status_code=404, detail="Refined file not found on disk")
+    
+    orig_name = active_ingestion_tasks.get(task_id, {}).get("filename", "refined.jsonl")
+    download_filename = orig_name.replace(".jsonl", "_refined.jsonl") if orig_name.endswith(".jsonl") else f"{orig_name}_refined.jsonl"
+
+    return FileResponse(
+        path=output_path,
+        media_type="application/x-ndjson",
+        filename=download_filename
+    )
+
 
 
 

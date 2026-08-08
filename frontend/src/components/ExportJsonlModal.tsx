@@ -1,6 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { X, Download, FileJson, Sparkles, UploadCloud, Database, RefreshCw } from 'lucide-react';
-import { getExportJsonlUrl, uploadAndRefineJsonl } from '../api';
+import { getExportJsonlUrl, startJsonlRefineTask, fetchJsonlRefineTaskStatus, getJsonlRefineDownloadUrl } from '../api';
 
 interface Props {
   isOpen: boolean;
@@ -31,10 +31,26 @@ export const ExportJsonlModal: React.FC<Props> = ({
   // Tab 2: Refine Existing File State
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [refiningFile, setRefiningFile] = useState(false);
+  const [activeTask, setActiveTask] = useState<any | null>(null);
   const [refineError, setRefineError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   if (!isOpen) return null;
+
+  const formatTime = (seconds: number): string => {
+    if (!seconds || seconds <= 0) return '0s';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    if (m >= 60) {
+      const h = Math.floor(m / 60);
+      const remM = m % 60;
+      return `${h}h ${remM}m`;
+    }
+    if (m > 0) {
+      return `${m}m ${s}s`;
+    }
+    return `${s}s`;
+  };
 
   const handleExportDb = () => {
     const docIds = scope === 'selected' && selectedDocId ? [selectedDocId] : undefined;
@@ -56,27 +72,46 @@ export const ExportJsonlModal: React.FC<Props> = ({
     setRefiningFile(true);
     setRefineError(null);
     try {
-      const blob = await uploadAndRefineJsonl(selectedFile);
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      const base = selectedFile.name.replace('.jsonl', '');
-      link.download = `${base}_refined.jsonl`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-      onClose();
+      const { task_id } = await startJsonlRefineTask(selectedFile);
+
+      const interval = setInterval(async () => {
+        const taskInfo = await fetchJsonlRefineTaskStatus(task_id);
+        if (taskInfo) {
+          setActiveTask(taskInfo);
+          if (taskInfo.status === 'completed') {
+            clearInterval(interval);
+            setRefiningFile(false);
+
+            // Auto-trigger file download from backend disk
+            const downloadUrl = getJsonlRefineDownloadUrl(task_id);
+            const link = document.createElement('a');
+            link.href = downloadUrl;
+            const base = selectedFile.name.replace('.jsonl', '');
+            link.download = `${base}_refined.jsonl`;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+
+            setTimeout(() => {
+              setActiveTask(null);
+              onClose();
+            }, 1200);
+          } else if (taskInfo.status === 'failed') {
+            clearInterval(interval);
+            setRefiningFile(false);
+            setRefineError(taskInfo.status_message || 'Refinement task failed');
+          }
+        }
+      }, 1000);
     } catch (err: any) {
-      setRefineError(err.message || 'Failed to refine JSONL file');
-    } finally {
+      setRefineError(err.message || 'Failed to start JSONL refinement task');
       setRefiningFile(false);
     }
   };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-card glass-panel" style={{ maxWidth: '540px', width: '92%' }} onClick={(e) => e.stopPropagation()}>
+      <div className="modal-card glass-panel" style={{ maxWidth: '560px', width: '92%' }} onClick={(e) => e.stopPropagation()}>
         <div className="modal-header">
           <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
             <FileJson size={20} style={{ color: 'var(--accent-primary)' }} />
@@ -274,13 +309,39 @@ export const ExportJsonlModal: React.FC<Props> = ({
                 Refine Existing Fine-Tuning Dataset (.jsonl)
               </div>
               <div style={{ fontSize: '0.78rem', color: 'var(--text-muted)', marginTop: '0.35rem', lineHeight: 1.4 }}>
-                Upload any existing <code>.jsonl</code> file (e.g. <code>casino_db_finetune_messages.jsonl</code>). The local LLM will refine each raw answer dump into a concise direct answer and append the source reference <code>(Fuente: ...)</code>. Thinking mode is automatically disabled.
+                Upload any existing <code>.jsonl</code> file (e.g. <code>casino_db_finetune_messages.jsonl</code>). The background task processes each line incrementally to disk with real-time metrics. Thinking mode is automatically disabled.
               </div>
             </div>
 
             {refineError && (
               <div style={{ padding: '0.65rem', background: 'rgba(244,63,94,0.15)', border: '1px solid rgba(244,63,94,0.3)', borderRadius: '6px', color: 'var(--accent-rose)', fontSize: '0.85rem', marginBottom: '1rem' }}>
                 {refineError}
+              </div>
+            )}
+
+            {/* Live Progress Card when Refining */}
+            {refiningFile && activeTask && (
+              <div style={{ padding: '0.85rem 1rem', background: 'rgba(15, 23, 42, 0.8)', border: '1px solid var(--border-color)', borderRadius: '8px', marginBottom: '1.25rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
+                  <span style={{ fontSize: '0.85rem', fontWeight: 600, color: 'var(--accent-cyan)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                    <RefreshCw size={16} className="spin" />
+                    {activeTask.status_message || 'Refining JSONL dataset...'}
+                  </span>
+                  <span style={{ fontSize: '0.9rem', fontWeight: 700, fontFamily: 'var(--font-mono)', color: 'var(--accent-cyan)' }}>
+                    {activeTask.percentage ?? 0}%
+                  </span>
+                </div>
+
+                <div style={{ width: '100%', height: '8px', background: 'rgba(255,255,255,0.08)', borderRadius: '4px', overflow: 'hidden', marginBottom: '0.6rem' }}>
+                  <div style={{ width: `${Math.max(activeTask.percentage ?? 5, 5)}%`, height: '100%', background: 'linear-gradient(90deg, var(--accent-primary), var(--accent-cyan))', transition: 'width 0.3s ease' }} />
+                </div>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '0.5rem', fontSize: '0.74rem', fontFamily: 'var(--font-mono)', color: 'var(--text-muted)' }}>
+                  <div>Progress: <strong style={{ color: '#fff' }}>{activeTask.completed_chunks ?? 0} / {activeTask.total_chunks ?? 0}</strong></div>
+                  <div>Avg Speed: <strong style={{ color: '#fff' }}>{activeTask.avg_speed_sec ?? 0}s</strong>/item</div>
+                  <div>Elapsed: <strong style={{ color: '#fff' }}>{formatTime(activeTask.elapsed_seconds ?? 0)}</strong></div>
+                  <div>ETA: <strong style={{ color: 'var(--accent-cyan)' }}>{formatTime(activeTask.eta_seconds ?? 0)}</strong></div>
+                </div>
               </div>
             )}
 
@@ -295,9 +356,10 @@ export const ExportJsonlModal: React.FC<Props> = ({
                   borderRadius: '8px',
                   padding: '1.5rem',
                   textAlign: 'center',
-                  cursor: 'pointer',
+                  cursor: refiningFile ? 'wait' : 'pointer',
                   background: selectedFile ? 'rgba(99, 102, 241, 0.08)' : 'transparent',
                   transition: 'all 0.2s ease',
+                  pointerEvents: refiningFile ? 'none' : 'auto',
                 }}
                 onClick={() => fileInputRef.current?.click()}
               >
@@ -305,6 +367,7 @@ export const ExportJsonlModal: React.FC<Props> = ({
                   type="file"
                   ref={fileInputRef}
                   accept=".jsonl,.json"
+                  disabled={refiningFile}
                   style={{ display: 'none' }}
                   onChange={(e) => {
                     if (e.target.files && e.target.files[0]) {
@@ -346,7 +409,7 @@ export const ExportJsonlModal: React.FC<Props> = ({
                   </>
                 ) : (
                   <>
-                    <Sparkles size={16} /> Refine & Download .jsonl
+                    <Sparkles size={16} /> Start Refinement & Download
                   </>
                 )}
               </button>

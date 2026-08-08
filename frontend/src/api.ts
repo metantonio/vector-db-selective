@@ -257,22 +257,33 @@ export function getExportJsonlUrl(
   return `${API_BASE}/databases/${dbId}/export/jsonl?${params.toString()}`;
 }
 
-export async function uploadAndRefineJsonl(file: File): Promise<Blob> {
+export async function startJsonlRefineTask(file: File): Promise<{ task_id: string; filename: string }> {
   const formData = new FormData();
   formData.append('file', file);
 
-  const res = await fetch(`${API_BASE}/refine-jsonl`, {
+  const res = await fetch(`${API_BASE}/refine-jsonl/start`, {
     method: 'POST',
     body: formData,
   });
 
   if (!res.ok) {
-    const err = await res.json().catch(() => ({ detail: 'Failed to refine JSONL file' }));
-    throw new Error(err.detail || 'Failed to refine JSONL file');
+    const err = await res.json().catch(() => ({ detail: 'Failed to start JSONL refinement' }));
+    throw new Error(err.detail || 'Failed to start JSONL refinement');
   }
 
-  return res.blob();
+  return res.json();
 }
+
+export async function fetchJsonlRefineTaskStatus(taskId: string): Promise<any> {
+  const res = await fetch(`${API_BASE}/refine-jsonl/tasks/${taskId}`);
+  if (!res.ok) return null;
+  return res.json();
+}
+
+export function getJsonlRefineDownloadUrl(taskId: string): string {
+  return `${API_BASE}/refine-jsonl/download/${taskId}`;
+}
+
 
 
 
