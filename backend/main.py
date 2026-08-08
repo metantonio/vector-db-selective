@@ -322,7 +322,8 @@ def export_database_jsonl(
     format: Optional[str] = "messages",
     synthetic_only: Optional[bool] = False,
     doc_ids: Optional[str] = None,
-    system_prompt: Optional[str] = None
+    system_prompt: Optional[str] = None,
+    refine_answers: Optional[bool] = False
 ):
     """Export database documents/chunks into JSONL format for fine-tuning LLMs."""
     try:
@@ -333,8 +334,10 @@ def export_database_jsonl(
             format=format or "messages",
             synthetic_only=bool(synthetic_only),
             doc_ids=doc_id_list,
-            system_prompt=system_prompt
+            system_prompt=system_prompt,
+            refine_answers=bool(refine_answers)
         )
+
 
         filename = f"{db_id}_finetune_{format or 'messages'}.jsonl"
         return Response(
@@ -348,6 +351,84 @@ def export_database_jsonl(
         raise HTTPException(status_code=404, detail=str(ve))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/refine-jsonl")
+async def refine_existing_jsonl(file: UploadFile = File(...)):
+    """Upload an existing JSONL file and refine all question-answer pairs using the local LLM."""
+    try:
+        content_bytes = await file.read()
+        text = content_bytes.decode("utf-8", errors="ignore")
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+        engine = db_manager.get_engine("default")
+        refined_lines = []
+
+        for line in lines:
+            try:
+                data = json.loads(line)
+            except Exception:
+                refined_lines.append(line)
+                continue
+
+            # Infer filename source
+            filename = file.filename.replace(".jsonl", ".txt")
+
+            # 1. Chat / Messages format
+            if "messages" in data and isinstance(data["messages"], list):
+                user_msg = next((m for m in data["messages"] if m.get("role") == "user"), None)
+                assistant_msg = next((m for m in data["messages"] if m.get("role") == "assistant"), None)
+                if user_msg and assistant_msg:
+                    q = user_msg.get("content", "")
+                    raw_a = assistant_msg.get("content", "")
+                    
+                    # Try extracting source from raw answer if present
+                    src_match = re.search(r"\[Source:\s*(.*?)(?:\s*\||\])", raw_a)
+                    if src_match:
+                        filename = src_match.group(1).strip()
+
+                    refined_a = engine.refine_answer(q, raw_a, filename)
+                    assistant_msg["content"] = refined_a
+                refined_lines.append(json.dumps(data, ensure_ascii=False))
+
+            # 2. Alpaca format
+            elif "instruction" in data and "output" in data:
+                q = data.get("instruction", "")
+                raw_a = data.get("output", "")
+                inp = data.get("input", "")
+                src_match = re.search(r"Source:\s*([^\s()]+)", inp)
+                if src_match:
+                    filename = src_match.group(1).strip()
+
+                refined_a = engine.refine_answer(q, raw_a, filename)
+                data["output"] = refined_a
+                refined_lines.append(json.dumps(data, ensure_ascii=False))
+
+            # 3. Prompt / Completion format
+            elif "prompt" in data and "completion" in data:
+                q = data.get("prompt", "")
+                raw_a = data.get("completion", "")
+                refined_a = engine.refine_answer(q, raw_a, filename)
+                data["completion"] = f" {refined_a}"
+                refined_lines.append(json.dumps(data, ensure_ascii=False))
+
+            else:
+                refined_lines.append(line)
+
+        output_content = "\n".join(refined_lines)
+        base_name = file.filename if file.filename.endswith(".jsonl") else f"{file.filename}.jsonl"
+        out_filename = base_name.replace(".jsonl", "_refined.jsonl")
+
+        return Response(
+            content=output_content,
+            media_type="application/x-ndjson",
+            headers={
+                "Content-Disposition": f"attachment; filename=\"{out_filename}\""
+            }
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to refine JSONL file: {str(e)}")
+
 
 
 

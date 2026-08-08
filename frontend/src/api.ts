@@ -241,11 +241,13 @@ export function getExportJsonlUrl(
   format: string = 'messages',
   syntheticOnly: boolean = false,
   docIds?: string[],
-  systemPrompt?: string
+  systemPrompt?: string,
+  refineAnswers: boolean = false
 ): string {
   const params = new URLSearchParams();
   params.append('format', format);
   params.append('synthetic_only', String(syntheticOnly));
+  params.append('refine_answers', String(refineAnswers));
   if (docIds && docIds.length > 0) {
     params.append('doc_ids', docIds.join(','));
   }
@@ -254,6 +256,25 @@ export function getExportJsonlUrl(
   }
   return `${API_BASE}/databases/${dbId}/export/jsonl?${params.toString()}`;
 }
+
+export async function uploadAndRefineJsonl(file: File): Promise<Blob> {
+  const formData = new FormData();
+  formData.append('file', file);
+
+  const res = await fetch(`${API_BASE}/refine-jsonl`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ detail: 'Failed to refine JSONL file' }));
+    throw new Error(err.detail || 'Failed to refine JSONL file');
+  }
+
+  return res.blob();
+}
+
+
 
 
 

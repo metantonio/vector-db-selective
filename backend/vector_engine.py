@@ -621,12 +621,106 @@ Excerpt:
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:top_k]
 
+    def refine_answer(self, question: str, chunk_text: str, filename: str) -> str:
+        """Refine raw chunk text into a direct, concise answer to the question with source citation, disabling LLM thinking mode."""
+        ollama_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
+        default_model = os.getenv("OLLAMA_DEFAULT_MODEL", "llama.cpp")
+
+        try:
+            llm_timeout = float(os.getenv("LLM_TIMEOUT", "60.0"))
+        except ValueError:
+            llm_timeout = 60.0
+
+        prompt = f"""You are a precise document Q&A assistant. Answer the following question directly and concisely using ONLY the information provided in the excerpt below.
+At the end of your concise answer, include the source citation in parentheses: (Fuente: {filename}).
+Do NOT use reasoning tags (<think>), chain-of-thought, or meta explanations. Give ONLY the direct answer and source reference.
+
+Excerpt:
+{chunk_text[:1500]}
+
+Question:
+{question}"""
+
+        import httpx
+
+        raw_response = ""
+
+        # 1. Try Ollama native endpoint (/api/generate) with options disabling thinking
+        try:
+            with httpx.Client(timeout=llm_timeout) as client:
+                res = client.post(
+                    f"{ollama_url}/api/generate",
+                    json={
+                        "model": default_model,
+                        "prompt": prompt,
+                        "stream": False,
+                        "options": {"temperature": 0.1, "think": False}
+                    }
+                )
+                if res.status_code == 200:
+                    data = res.json()
+                    raw_response = data.get("response", "").strip()
+        except Exception:
+            pass
+
+        # 2. Try OpenAI-compatible endpoint (/v1/chat/completions)
+        if not raw_response:
+            try:
+                with httpx.Client(timeout=llm_timeout) as client:
+                    res = client.post(
+                        f"{ollama_url}/v1/chat/completions",
+                        json={
+                            "model": default_model,
+                            "messages": [
+                                {"role": "system", "content": "You are a concise Q&A assistant. Provide direct answers without thinking tags or step-by-step reasoning."},
+                                {"role": "user", "content": prompt}
+                            ],
+                            "stream": False,
+                            "temperature": 0.1
+                        }
+                    )
+                    if res.status_code == 200:
+                        data = res.json()
+                        choices = data.get("choices", [])
+                        if choices:
+                            raw_response = choices[0].get("message", {}).get("content", "").strip()
+            except Exception:
+                pass
+
+        # 3. Try llama.cpp native completion endpoint (/completion)
+        if not raw_response:
+            try:
+                with httpx.Client(timeout=llm_timeout) as client:
+                    res = client.post(
+                        f"{ollama_url}/completion",
+                        json={"prompt": prompt, "temperature": 0.1}
+                    )
+                    if res.status_code == 200:
+                        data = res.json()
+                        raw_response = data.get("content", "").strip()
+            except Exception:
+                pass
+
+        if not raw_response:
+            # Fallback if local LLM is unreachable
+            return f"{chunk_text[:300].strip()} (Fuente: {filename})"
+
+        # Post-process: strip <think>...</think> tags if model output them
+        cleaned = re.sub(r"<think>.*?</think>", "", raw_response, flags=re.DOTALL).strip()
+
+        # Ensure source citation is present
+        if f"(Fuente: {filename})" not in cleaned and f"Fuente: {filename}" not in cleaned:
+            cleaned = f"{cleaned}\n(Fuente: {filename})"
+
+        return cleaned
+
     def export_jsonl(
         self,
         format: str = "messages",
         synthetic_only: bool = False,
         doc_ids: Optional[List[str]] = None,
-        system_prompt: Optional[str] = None
+        system_prompt: Optional[str] = None,
+        refine_answers: bool = False
     ) -> str:
         """Export database chunks/synthetic Q&A pairs into JSONL format for fine-tuning LLMs."""
         fmt = (format or "messages").lower().strip()
@@ -668,56 +762,60 @@ Excerpt:
                 clean_text = clean_text.replace(sq_match.group(0), "").strip()
 
             # Prefer parent_text for context if present and non-empty
-            target_context = parent_text.strip() if parent_text and parent_text.strip() else clean_text.strip()
-            if not target_context:
+            raw_target_context = parent_text.strip() if parent_text and parent_text.strip() else clean_text.strip()
+            if not raw_target_context:
                 continue
 
             if synthetic_questions:
                 for q in synthetic_questions:
+                    ans_text = self.refine_answer(q, raw_target_context, filename) if refine_answers else raw_target_context
                     if fmt == "alpaca":
                         item = {
                             "instruction": q,
                             "input": f"Source: {filename} (Folder: {folder})",
-                            "output": target_context
+                            "output": ans_text
                         }
                     elif fmt in ["completion", "prompt_completion"]:
                         item = {
                             "prompt": f"Context: {filename}\nQuestion: {q}\nAnswer:",
-                            "completion": f" {target_context}"
+                            "completion": f" {ans_text}"
                         }
                     else:  # default: messages
                         item = {
                             "messages": [
                                 {"role": "system", "content": sys_prompt},
                                 {"role": "user", "content": q},
-                                {"role": "assistant", "content": target_context}
+                                {"role": "assistant", "content": ans_text}
                             ]
                         }
                     json_lines.append(json.dumps(item, ensure_ascii=False))
             elif not synthetic_only:
                 # Standard chunk export without synthetic Q&A
+                user_q = f"Please provide information regarding the content of {filename}."
+                ans_text = self.refine_answer(user_q, raw_target_context, filename) if refine_answers else raw_target_context
                 if fmt == "alpaca":
                     item = {
                         "instruction": f"Provide detailed context and information from document {filename}.",
                         "input": f"Folder: {folder}",
-                        "output": target_context
+                        "output": ans_text
                     }
                 elif fmt in ["completion", "prompt_completion"]:
                     item = {
                         "prompt": f"[Source: {filename}]\n",
-                        "completion": target_context
+                        "completion": ans_text
                     }
                 else:  # default: messages
                     item = {
                         "messages": [
                             {"role": "system", "content": sys_prompt},
-                            {"role": "user", "content": f"Please provide context regarding the content of {filename}."},
-                            {"role": "assistant", "content": target_context}
+                            {"role": "user", "content": user_q},
+                            {"role": "assistant", "content": ans_text}
                         ]
                     }
                 json_lines.append(json.dumps(item, ensure_ascii=False))
 
         return "\n".join(json_lines)
+
 
 
 
